@@ -102,24 +102,49 @@ class NetworkingAgent(BaseAgent):
 
 User profile:
 - Target roles: {prefs.target_roles or ["Software Engineer"]}
-- Experience level: {prefs.experience_level or "mid"}
+- Experience level: {prefs.experience_level or "entry"}
 - Preferred locations: {prefs.target_locations or ["anywhere"]}
 
 {companies_instruction}
 
 Already known contacts (LinkedIn URLs — skip these): {list(existing_urls)[:30]}
 
-Instructions:
-1. For each company, call google_search_people to find relevant professionals.
-2. Focus on: Engineering Managers, Staff/Principal Engineers, Senior Engineers, Technical Recruiters.
-3. Rank each person 0.0–1.0 on how valuable a coffee chat would be for getting a referral.
-4. Write a personalized 2–3 sentence outreach message per contact.
-   - Mention something specific about their company or role
-   - Be genuine and direct about wanting to learn more about the team
-   - Do NOT ask for a job directly
-5. Only include contacts with score >= 0.6.
-6. Skip contacts whose LinkedIn URL is in the already-known list.
-7. Call save_contacts once with all results.
+## Who to target
+The user is an entry-level/early-career candidate. Target people who are MOST LIKELY TO RESPOND to a cold message from someone junior:
+- Individual contributors: Software Engineers (mid/senior level), Analysts, PMs (non-director)
+- Technical Recruiters and Talent Sourcers (they respond by definition — it's their job)
+- People who graduated within the last 5–8 years (more empathetic to job seekers)
+- Team leads or eng managers at small/mid-size companies
+
+## Who to EXCLUDE
+DO NOT save contacts who hold these roles — they are extremely unlikely to respond to entry-level outreach:
+- C-suite (CEO, CTO, CPO, CFO, COO, etc.)
+- VP-level (VP of Engineering, VP of Product, etc.)
+- Director-level (Director of Engineering, Director of Product, etc.)
+- Founders / Co-founders
+- Partners / Principals at VC firms
+
+## Stale data warning
+Google search results are often months or years out of date. A snippet may show someone's OLD title from a previous job.
+- Do NOT assert that someone "currently" holds a title unless you are certain
+- Write outreach messages that are role-agnostic — reference their background or company, NOT a specific current title
+- Set the `title` field to what the search result shows, but treat it as approximate
+
+## Scoring
+Rank each person 0.0–1.0 on how likely a coffee chat leads to a referral or warm intro:
+- Recruiters at the target company: 0.85–0.95
+- Mid/senior ICs in the relevant team: 0.70–0.85
+- Eng managers at smaller companies: 0.65–0.80
+- Anyone VP+ or C-suite: score them 0.0 (they will be filtered out)
+
+## Outreach message rules
+- 2–3 sentences max
+- Do NOT mention a specific current job title (it may be wrong)
+- Reference their company or general background instead
+- Be direct about wanting to learn more about the team / culture
+- Do NOT ask for a job or referral directly
+
+Only include contacts with score >= 0.6. Call save_contacts once with all results.
 """
 
         await self.run_tool_loop(system_prompt, initial_message, TOOLS)
