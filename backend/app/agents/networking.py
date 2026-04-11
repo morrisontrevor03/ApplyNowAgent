@@ -124,11 +124,15 @@ DO NOT save contacts who hold these roles — they are extremely unlikely to res
 - Founders / Co-founders
 - Partners / Principals at VC firms
 
-## Stale data warning
-Google search results are often months or years out of date. A snippet may show someone's OLD title from a previous job.
-- Do NOT assert that someone "currently" holds a title unless you are certain
-- Write outreach messages that are role-agnostic — reference their background or company, NOT a specific current title
-- Set the `title` field to what the search result shows, but treat it as approximate
+## Current employment — STRICT RULE
+Google search results are often months or years out of date. You MUST verify current employment from the snippet before saving a contact.
+
+For each result, look at the snippet text carefully:
+- INCLUDE if the snippet clearly shows they currently work at the target company (e.g. "Software Engineer at Stripe", "Recruiter · Stripe", the page title shows "[Name] - [Role] at [Company]")
+- EXCLUDE if the snippet is ambiguous, shows a different current employer, or only mentions the target company in passing (e.g. "previously at...", "ex-Stripe", or the current role is at a different company)
+- When in doubt, EXCLUDE. A false positive (suggesting someone who no longer works there) is much worse than a false negative.
+
+Set the `title` field to exactly what the snippet shows — do not invent or infer a title.
 
 ## Scoring
 Rank each person 0.0–1.0 on how likely a coffee chat leads to a referral or warm intro:
@@ -165,7 +169,8 @@ Only include contacts with score >= 0.6. Call save_contacts once with all result
         if not settings.google_api_key or not settings.google_search_engine_id:
             return json.dumps({"error": "Google API not configured"})
 
-        query = f'site:linkedin.com/in ({title_keywords}) "{company}"'
+        # "at Company" biases Google toward profiles where the company appears as a current role
+        query = f'site:linkedin.com/in ({title_keywords}) "at {company}"'
 
         async with httpx.AsyncClient(timeout=15) as client:
             try:
