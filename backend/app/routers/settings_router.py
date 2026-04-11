@@ -19,6 +19,9 @@ class PreferencesUpdate(BaseModel):
     max_salary: int | None = None
     employment_types: list[str] | None = None
     experience_level: str | None = None
+    salary_type: str | None = None
+    location_flexible: bool | None = None
+    work_environment: list[str] | None = None
     scout_enabled: bool | None = None
     networking_enabled: bool | None = None
     application_agent_enabled: bool | None = None
@@ -33,6 +36,9 @@ class PreferencesResponse(BaseModel):
     max_salary: int | None
     employment_types: list[str]
     experience_level: str | None
+    salary_type: str | None
+    location_flexible: bool
+    work_environment: list[str]
     scout_enabled: bool
     networking_enabled: bool
     application_agent_enabled: bool

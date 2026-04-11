@@ -232,6 +232,9 @@ export interface Preferences {
   max_salary: number | null;
   employment_types: string[];
   experience_level: string | null;
+  salary_type: "hourly" | "salary" | null;
+  location_flexible: boolean;
+  work_environment: string[];
   scout_enabled: boolean;
   networking_enabled: boolean;
   application_agent_enabled: boolean;

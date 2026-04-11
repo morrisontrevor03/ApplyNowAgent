@@ -44,6 +44,10 @@ class UserPreferences(Base):
     employment_types: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
     experience_level: Mapped[str | None] = mapped_column(String(50))
 
+    salary_type: Mapped[str | None] = mapped_column(String(10))  # "hourly" or "salary"
+    location_flexible: Mapped[bool] = mapped_column(Boolean, default=True)
+    work_environment: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+
     scout_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     networking_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     application_agent_enabled: Mapped[bool] = mapped_column(Boolean, default=True)

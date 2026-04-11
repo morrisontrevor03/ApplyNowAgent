@@ -21,7 +21,7 @@ export default function RegisterPage() {
     try {
       const { access_token } = await auth.register(email, password, fullName || undefined);
       await login(access_token);
-      router.replace("/resume");
+      router.replace("/onboarding");
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Registration failed");
     } finally {
