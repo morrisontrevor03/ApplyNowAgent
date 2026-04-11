@@ -89,6 +89,7 @@ def _serialize(c: Contact) -> dict:
         "last_name": c.last_name,
         "title": c.title,
         "linkedin_url": c.linkedin_url,
+        "email": c.email,
         "seniority": c.seniority,
         "department": c.department,
         "relevance_score": c.relevance_score,

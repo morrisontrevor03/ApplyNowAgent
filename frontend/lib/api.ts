@@ -194,6 +194,7 @@ export interface Contact {
   last_name: string | null;
   title: string | null;
   linkedin_url: string | null;
+  email: string | null;
   seniority: string | null;
   relevance_score: number | null;
   relevance_reasoning: string | null;

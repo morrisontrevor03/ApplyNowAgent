@@ -251,6 +251,17 @@ function ContactDrawer({
                 </a>
               </div>
             )}
+            {contact.email && (
+              <div className="col-span-2 rounded-lg bg-white/3 border border-white/8 px-3 py-2.5 flex items-center justify-between">
+                <p className="text-xs text-zinc-500">Email</p>
+                <a
+                  href={`mailto:${contact.email}`}
+                  className="text-xs text-zinc-300 hover:text-white transition-colors"
+                >
+                  {contact.email}
+                </a>
+              </div>
+            )}
           </div>
 
           {/* Status */}

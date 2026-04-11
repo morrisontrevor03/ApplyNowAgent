@@ -15,46 +15,51 @@ logger = logging.getLogger(__name__)
 
 TARGET_COMPANY_COUNT = 25
 
+# Seniority levels we want — ICs, recruiters, and managers at smaller companies.
+# Explicitly excludes c_suite, vp, head, director, partner, owner, founder.
+APOLLO_TARGET_SENIORITIES = ["entry", "senior", "manager"]
+
+APOLLO_PEOPLE_SEARCH_URL = "https://api.apollo.io/v1/mixed_people/search"
+
 # ── Tool definitions ───────────────────────────────────────────────────────
 
-# Primary tool: used when PROXYCURL_API_KEY is set.
-# Single call per (company, role) returns verified current employees with
-# accurate titles and real LinkedIn URLs straight from LinkedIn data.
-TOOL_FIND_EMPLOYEES = {
-    "name": "find_employees_at_company",
+TOOL_FIND_PEOPLE = {
+    "name": "find_people_at_company",
     "description": (
-        "Find current employees at a company. Returns verified current employees "
-        "with accurate titles and confirmed LinkedIn URLs. Call this once per "
-        "company per role type (e.g. once for recruiters, once for engineers)."
+        "Search Apollo for current employees at a company by role. "
+        "Returns real people with verified current titles, LinkedIn URLs, and email addresses. "
+        "Senior leaders (VP+, C-suite, Directors) are automatically excluded. "
+        "Call this once per company per role type."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "company_name": {
                 "type": "string",
-                "description": "Company name exactly as commonly known (e.g. 'Stripe', 'Airbnb')",
+                "description": "Company name as commonly known (e.g. 'Stripe', 'Airbnb')",
             },
-            "role_keywords": {
-                "type": "string",
+            "titles": {
+                "type": "array",
+                "items": {"type": "string"},
                 "description": (
-                    "Role or title to search for within the company. "
-                    "Use one focused role per call, e.g. 'Recruiter', 'Software Engineer', 'Product Manager'."
+                    "Job titles to search for. Use one focused group per call. "
+                    "Examples: ['Recruiter', 'Technical Recruiter', 'Talent Sourcer'] "
+                    "or ['Software Engineer', 'SWE', 'Software Developer']"
                 ),
             },
             "max_results": {
                 "type": "integer",
                 "default": 10,
-                "description": "Max employees to return (default 10, max 25)",
+                "description": "Max people to return (default 10)",
             },
         },
-        "required": ["company_name", "role_keywords"],
+        "required": ["company_name", "titles"],
     },
 }
 
-# Fallback tool: used when Proxycurl is not configured.
-TOOL_GOOGLE_SEARCH = {
+TOOL_GOOGLE_FALLBACK = {
     "name": "google_search_people",
-    "description": "Search Google for professionals at a specific company (fallback — less accurate than find_employees_at_company).",
+    "description": "Fallback: search Google for professionals at a company. Less accurate — use only when Apollo is unavailable.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -67,7 +72,7 @@ TOOL_GOOGLE_SEARCH = {
 
 TOOL_SAVE_CONTACTS = {
     "name": "save_contacts",
-    "description": "Save ranked networking contacts to the database. Call ONCE at the end with all results.",
+    "description": "Save all networking contacts to the database. Call ONCE at the end with every contact collected.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -76,18 +81,19 @@ TOOL_SAVE_CONTACTS = {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "company":            {"type": "string"},
-                        "first_name":         {"type": "string"},
-                        "last_name":          {"type": "string"},
-                        "title":              {"type": "string"},
-                        "linkedin_url":       {"type": "string"},
-                        "seniority":          {"type": "string"},
-                        "department":         {"type": "string"},
-                        "relevance_score":    {"type": "number", "description": "0.0 to 1.0"},
-                        "relevance_reasoning":{"type": "string"},
-                        "outreach_message":   {"type": "string", "description": "Warm 2–3 sentence coffee-chat message"},
+                        "company":             {"type": "string"},
+                        "first_name":          {"type": "string"},
+                        "last_name":           {"type": "string"},
+                        "title":               {"type": "string"},
+                        "linkedin_url":        {"type": "string"},
+                        "email":               {"type": "string"},
+                        "seniority":           {"type": "string"},
+                        "department":          {"type": "string"},
+                        "relevance_score":     {"type": "number", "description": "0.0 to 1.0"},
+                        "relevance_reasoning": {"type": "string"},
+                        "outreach_message":    {"type": "string", "description": "Warm 2–3 sentence coffee-chat message"},
                     },
-                    "required": ["company", "first_name", "title", "linkedin_url", "relevance_score", "outreach_message"],
+                    "required": ["company", "first_name", "title", "relevance_score", "outreach_message"],
                 },
             }
         },
@@ -98,7 +104,7 @@ TOOL_SAVE_CONTACTS = {
 
 class NetworkingAgent(BaseAgent):
     agent_type = "networking"
-    # 2 calls/company (recruiter + IC) × 25 companies + 1 save = ~51 iterations minimum
+    # 2 calls/company × 25 companies + 1 save = ~51; give headroom
     max_iterations = 80
 
     # ── Entry point ────────────────────────────────────────────────────────
@@ -118,24 +124,19 @@ class NetworkingAgent(BaseAgent):
 
         target_companies = prefs.target_companies or []
 
-        # Seed the URL cache with contacts already in the DB so we never
-        # re-fetch profiles we already have.
+        # Track URLs seen this run (seeded from DB) to avoid duplicates
         existing_result = await self.db.execute(
             select(Contact.linkedin_url).where(
                 Contact.user_id == self.user_id,
                 Contact.linkedin_url.isnot(None),
             )
         )
-        existing_urls: set[str] = {row[0] for row in existing_result}
-        self._seen_urls: set[str] = set(existing_urls)
+        self._seen_urls: set[str] = {row[0] for row in existing_result}
 
-        # Per-run company LinkedIn URL cache (avoids re-resolving same company name)
-        self._company_url_cache: dict[str, str | None] = {}
+        use_apollo = bool(settings.apollo_api_key)
+        tools = [TOOL_FIND_PEOPLE if use_apollo else TOOL_GOOGLE_FALLBACK, TOOL_SAVE_CONTACTS]
 
-        use_proxycurl = bool(settings.proxycurl_api_key)
-        tools = [TOOL_FIND_EMPLOYEES if use_proxycurl else TOOL_GOOGLE_SEARCH, TOOL_SAVE_CONTACTS]
-
-        # ── Build company instructions ─────────────────────────────────────
+        # ── Company instructions ───────────────────────────────────────────
 
         n = len(target_companies)
         expand = bool(getattr(prefs, "open_to_similar_companies", False))
@@ -146,50 +147,42 @@ class NetworkingAgent(BaseAgent):
                 companies_instruction = (
                     f"The user listed {n} companies: {target_companies}. "
                     f"They are open to similar companies. Identify {needed} additional companies "
-                    f"that are similar in domain, size, or tech stack. "
-                    f"Search all {TARGET_COMPANY_COUNT} combined — do not skip any."
+                    f"similar in domain, size, or tech stack, for a combined total of {TARGET_COMPANY_COUNT}."
                 )
                 initial_message = (
-                    f"Build a networking list starting with {target_companies} ({n} companies), "
-                    f"then add {needed} similar companies for a total of {TARGET_COMPANY_COUNT}. "
-                    f"For each company call find_employees_at_company twice: "
-                    f"once with role_keywords='Recruiter' and once with role_keywords='{prefs.target_roles[0]}'. "
-                    f"Goal: 50+ saved contacts."
+                    f"Build a networking list. Start with {target_companies}, then add {needed} similar "
+                    f"companies (total {TARGET_COMPANY_COUNT}). For EACH company call find_people_at_company "
+                    f"twice: once with titles=['Recruiter','Technical Recruiter','Talent Sourcer'] and once "
+                    f"with titles={prefs.target_roles[:3]}. Goal: 50+ contacts saved."
                 )
             else:
-                companies_instruction = (
-                    f"The user has {n} target companies: {target_companies}. Search all of them."
-                )
+                companies_instruction = f"The user's {n} target companies: {target_companies}. Search all of them."
                 initial_message = (
-                    f"Build a networking list for these {n} companies: {target_companies}. "
-                    f"For each company call find_employees_at_company twice: "
-                    f"once with role_keywords='Recruiter' and once with role_keywords='{prefs.target_roles[0]}'. "
-                    f"Goal: 50+ saved contacts."
+                    f"Build a networking list for {target_companies}. For EACH company call "
+                    f"find_people_at_company twice: once with titles=['Recruiter','Technical Recruiter','Talent Sourcer'] "
+                    f"and once with titles={prefs.target_roles[:3]}. Goal: 50+ contacts saved."
                 )
         else:
             companies_instruction = (
-                f"The user has no specific target companies. Choose {TARGET_COMPANY_COUNT} companies "
-                f"that actively hire {', '.join(prefs.target_roles)} at the "
-                f"{prefs.experience_level or 'entry'} level. Mix large tech, high-growth startups, "
-                f"and mid-size product companies."
+                f"No target companies set. Choose {TARGET_COMPANY_COUNT} companies that actively "
+                f"hire {', '.join(prefs.target_roles)} at the {prefs.experience_level or 'entry'} level. "
+                f"Mix large tech, high-growth startups, and mid-size product companies."
             )
             initial_message = (
                 f"Build a networking list for a {prefs.experience_level or 'entry'}-level "
-                f"{', '.join(prefs.target_roles)} job seeker. "
-                f"Pick {TARGET_COMPANY_COUNT} strong companies, then for each call "
-                f"find_employees_at_company twice: once for 'Recruiter' and once for "
-                f"'{prefs.target_roles[0]}'. Goal: 50+ saved contacts."
+                f"{', '.join(prefs.target_roles)} job seeker. Pick {TARGET_COMPANY_COUNT} companies, "
+                f"then for each call find_people_at_company twice: once for recruiters and once for "
+                f"{prefs.target_roles[0]}. Goal: 50+ contacts saved."
             )
 
-        data_source_note = (
-            "Employee data comes from LinkedIn via Proxycurl — titles and current employment "
-            "are accurate and up to date. Trust the data as-is."
-            if use_proxycurl else
-            "Data comes from Google search snippets which may be stale. Only include someone "
-            "if the snippet clearly shows they currently work at the target company."
+        data_note = (
+            "Apollo data is sourced directly — titles and current employment are accurate. Trust the results."
+            if use_apollo else
+            "Fallback: Google snippets may be stale. Only include someone if the snippet clearly shows "
+            "they currently work at that company."
         )
 
-        system_prompt = f"""You are the ApplyNow Networking Agent. Build a large, high-quality list of networking contacts.
+        system_prompt = f"""You are the ApplyNow Networking Agent. Build a large, high-quality networking list for the user.
 
 ## User profile
 - Target roles: {prefs.target_roles}
@@ -199,32 +192,35 @@ class NetworkingAgent(BaseAgent):
 ## Companies
 {companies_instruction}
 
-## Already in database — skip these LinkedIn URLs
-{list(existing_urls)[:60]}
+## Skip these LinkedIn URLs (already in database)
+{list(self._seen_urls)[:60]}
 
-## Data quality
-{data_source_note}
+## Data
+{data_note}
 
-## Who to include
-The user is an entry-level / early-career candidate. Prioritise people likely to respond:
-1. **Technical Recruiters / Talent Sourcers** — highest priority, responding is their job (score 0.85–0.95)
-2. **Mid / Senior Individual Contributors** in the relevant team (score 0.70–0.85)
-3. **Eng managers at smaller companies** (<500 employees) (score 0.65–0.80)
+## Who to prioritise
+The user is entry-level. Target people most likely to respond to a cold message:
 
-## Who to EXCLUDE (score 0.0, do not save)
-C-suite, VPs, Directors, Founders, Partners — will not respond to entry-level outreach.
+1. **Technical Recruiters / Talent Sourcers** — score 0.85–0.95 (responding is their job)
+2. **Mid / Senior Individual Contributors** in the relevant team — score 0.70–0.85
+3. **Engineering Managers at smaller companies** (<500 employees) — score 0.65–0.80
 
-## Volume target
-Work through ALL companies before calling save_contacts. Goal is 50+ contacts total.
-Do not stop early. Two find_employees_at_company calls per company minimum.
+VP+, Directors, C-suite, and Founders are already filtered out at the API level.
+If any slip through, score them 0.0 and exclude them.
+
+## Volume
+Work through ALL {TARGET_COMPANY_COUNT} companies before calling save_contacts.
+Do not stop early. Two find_people_at_company calls per company minimum.
+Goal: 50+ contacts total.
 
 ## Outreach messages
 - 2–3 sentences, warm and direct
-- Reference the company or team, NOT a specific title
-- Invite a conversation about the team / culture
+- Reference the company or team — not a specific title
+- Ask to learn about the team / culture
 - Never directly ask for a job or referral
 
-Save all contacts with score >= 0.6 in a single save_contacts call at the end.
+Call save_contacts ONCE at the end with all contacts that score >= 0.6.
+If a contact has an email address from the search results, include it in the outreach_message as a postscript or note it in relevance_reasoning.
 """
 
         await self.run_tool_loop(system_prompt, initial_message, tools)
@@ -235,119 +231,79 @@ Save all contacts with score >= 0.6 in a single save_contacts call at the end.
     # ── Tool dispatch ──────────────────────────────────────────────────────
 
     async def dispatch_tool(self, name: str, input_data: dict) -> Any:
-        if name == "find_employees_at_company":
-            return await self._find_employees(
+        if name == "find_people_at_company":
+            return await self._apollo_search(
                 input_data["company_name"],
-                input_data["role_keywords"],
-                min(int(input_data.get("max_results", 10)), 25),
+                input_data["titles"],
+                int(input_data.get("max_results", 10)),
             )
         if name == "google_search_people":
-            return await self._google_search_people(
-                input_data["company"],
-                input_data["title_keywords"],
-            )
+            return await self._google_fallback(input_data["company"], input_data["title_keywords"])
         if name == "save_contacts":
             return await self._save_contacts(input_data["contacts"])
         return f"Unknown tool: {name}"
 
-    # ── Proxycurl: company resolve ─────────────────────────────────────────
+    # ── Apollo people search ───────────────────────────────────────────────
 
-    async def _resolve_company_url(self, client: httpx.AsyncClient, company_name: str) -> str | None:
-        if company_name in self._company_url_cache:
-            return self._company_url_cache[company_name]
-
+    async def _apollo_search(self, company_name: str, titles: list[str], max_results: int) -> str:
         try:
-            resp = await client.get(
-                "https://nubela.co/proxycurl/api/linkedin/company/resolve",
-                params={"company_name": company_name},
-                headers={"Authorization": f"Bearer {settings.proxycurl_api_key}"},
-                timeout=15,
-            )
-            if resp.status_code != 200:
-                self._company_url_cache[company_name] = None
-                return None
-            url = resp.json().get("url")
-            self._company_url_cache[company_name] = url
-            return url
-        except Exception as exc:
-            logger.warning("Company resolve error for '%s': %s", company_name, exc)
-            self._company_url_cache[company_name] = None
-            return None
-
-    # ── Proxycurl: employee listing ────────────────────────────────────────
-
-    async def _find_employees(self, company_name: str, role_keywords: str, max_results: int) -> str:
-        async with httpx.AsyncClient() as client:
-            company_url = await self._resolve_company_url(client, company_name)
-            if not company_url:
-                return json.dumps({"error": f"Could not find LinkedIn page for '{company_name}'"})
-
-            try:
-                resp = await client.get(
-                    "https://nubela.co/proxycurl/api/linkedin/company/employees/",
-                    params={
-                        "linkedin_company_profile_url": company_url,
-                        "role_search": role_keywords,
-                        "employment_status": "current",
-                        "page_size": max_results,
-                        "enrich_profiles": "enrich",
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(
+                    APOLLO_PEOPLE_SEARCH_URL,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Cache-Control": "no-cache",
+                        "X-Api-Key": settings.apollo_api_key,
                     },
-                    headers={"Authorization": f"Bearer {settings.proxycurl_api_key}"},
-                    timeout=30,
+                    json={
+                        "q_organization_name": company_name,
+                        "person_titles": titles,
+                        "person_seniorities": APOLLO_TARGET_SENIORITIES,
+                        "per_page": min(max_results, 25),
+                        "page": 1,
+                    },
                 )
                 resp.raise_for_status()
                 data = resp.json()
-            except Exception as exc:
-                logger.warning("Employee listing error for '%s': %s", company_name, exc)
-                return json.dumps({"error": str(exc)})
+        except Exception as exc:
+            logger.warning("Apollo search error for '%s': %s", company_name, exc)
+            return json.dumps({"error": str(exc)})
 
-        employees = []
-        for emp in data.get("employees") or []:
-            profile = emp.get("profile") or {}
-            linkedin_url = (
-                emp.get("profile_url")
-                or (profile.get("public_identifier") and
-                    f"https://www.linkedin.com/in/{profile['public_identifier']}/")
-            )
+        people = []
+        for p in data.get("people") or []:
+            linkedin_url = p.get("linkedin_url") or ""
+            # Normalise to https
+            if linkedin_url and linkedin_url.startswith("http://"):
+                linkedin_url = linkedin_url.replace("http://", "https://", 1)
 
-            # Skip if already in DB or seen this run
             if linkedin_url and linkedin_url in self._seen_urls:
                 continue
 
-            # Derive current title from experiences (ends_at=null) or headline
-            experiences = profile.get("experiences") or []
-            current_exp = next((e for e in experiences if e.get("ends_at") is None), None)
-            title = (
-                current_exp.get("title", "")
-                if current_exp
-                else profile.get("occupation") or profile.get("headline", "")
-            )
+            current_org = (p.get("organization") or {}).get("name", company_name)
 
-            employee = {
-                "first_name": profile.get("first_name", ""),
-                "last_name":  profile.get("last_name", ""),
-                "title":      title,
-                "company":    company_name,
+            person = {
+                "first_name":   p.get("first_name", ""),
+                "last_name":    p.get("last_name", ""),
+                "title":        p.get("title", ""),
+                "company":      current_org,
                 "linkedin_url": linkedin_url,
-                "headline":   profile.get("headline", ""),
+                "email":        p.get("email") or "",
+                "seniority":    p.get("seniority", ""),
             }
 
             if linkedin_url:
                 self._seen_urls.add(linkedin_url)
 
-            employees.append(employee)
+            people.append(person)
 
-        logger.info(
-            "find_employees '%s' role='%s' → %d results",
-            company_name, role_keywords, len(employees),
-        )
-        return json.dumps({"company": company_name, "role_search": role_keywords, "employees": employees})
+        logger.info("Apollo '%s' titles=%s → %d people", company_name, titles, len(people))
+        return json.dumps({"company": company_name, "titles_searched": titles, "people": people})
 
     # ── Google fallback ────────────────────────────────────────────────────
 
-    async def _google_search_people(self, company: str, title_keywords: str) -> str:
+    async def _google_fallback(self, company: str, title_keywords: str) -> str:
         if not settings.google_api_key or not settings.google_search_engine_id:
-            return json.dumps({"error": "Neither Proxycurl nor Google API is configured"})
+            return json.dumps({"error": "Neither Apollo nor Google API is configured"})
 
         query = f'site:linkedin.com/in ({title_keywords}) "at {company}"'
         async with httpx.AsyncClient(timeout=15) as client:
@@ -368,16 +324,16 @@ Save all contacts with score >= 0.6 in a single save_contacts call at the end.
                 return json.dumps({"error": str(exc)})
 
         results = [
-            {
-                "title":   item.get("title", ""),
-                "url":     item.get("link", ""),
-                "snippet": item.get("snippet", ""),
-            }
+            {"title": item.get("title", ""), "url": item.get("link", ""), "snippet": item.get("snippet", "")}
             for item in data.get("items", [])
             if "linkedin.com/in/" in item.get("link", "")
             and item.get("link") not in self._seen_urls
         ]
-        return json.dumps({"company": company, "results": results, "warning": "Proxycurl not configured — verify current employment from snippet before saving"})
+        return json.dumps({
+            "company": company,
+            "results": results,
+            "warning": "Apollo not configured — only include contacts where snippet confirms current employment",
+        })
 
     # ── Save contacts ──────────────────────────────────────────────────────
 
@@ -390,7 +346,6 @@ Save all contacts with score >= 0.6 in a single save_contacts call at the end.
 
             linkedin_url = item.get("linkedin_url") or ""
 
-            # Skip duplicates (belt-and-suspenders check against DB)
             if linkedin_url:
                 existing = await self.db.execute(
                     select(Contact).where(
@@ -408,6 +363,7 @@ Save all contacts with score >= 0.6 in a single save_contacts call at the end.
                 last_name=item.get("last_name"),
                 title=item.get("title", ""),
                 linkedin_url=linkedin_url or None,
+                email=item.get("email") or None,
                 seniority=item.get("seniority"),
                 department=item.get("department"),
                 relevance_score=float(item.get("relevance_score", 0)),

@@ -18,6 +18,7 @@ class Contact(Base):
     last_name: Mapped[str | None] = mapped_column(String(255))
     title: Mapped[str | None] = mapped_column(String(255))
     linkedin_url: Mapped[str | None] = mapped_column(String(500))
+    email: Mapped[str | None] = mapped_column(String(255))
     seniority: Mapped[str | None] = mapped_column(String(50))
     department: Mapped[str | None] = mapped_column(String(100))
     relevance_score: Mapped[float | None] = mapped_column(Float)

@@ -24,8 +24,8 @@ class Settings(BaseSettings):
     google_api_key: str = ""
     google_search_engine_id: str = ""
 
-    # Proxycurl (LinkedIn verification)
-    proxycurl_api_key: str = ""
+    # Apollo.io (people search for networking agent)
+    apollo_api_key: str = ""
 
     # Email
     resend_api_key: str = ""
