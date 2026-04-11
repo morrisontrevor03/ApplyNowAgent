@@ -235,6 +235,7 @@ export interface Preferences {
   salary_type: "hourly" | "salary" | null;
   location_flexible: boolean;
   work_environment: string[];
+  open_to_similar_companies: boolean;
   scout_enabled: boolean;
   networking_enabled: boolean;
   application_agent_enabled: boolean;

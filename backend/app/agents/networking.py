@@ -87,29 +87,51 @@ class NetworkingAgent(BaseAgent):
         # Seeded with existing DB contacts so we never call Proxycurl for URLs we already have.
         self._proxycurl_cache: dict[str, dict | None] = {url: None for url in existing_urls}
 
+        TARGET_COMPANY_COUNT = 25
+
         if target_companies:
-            companies_instruction = (
-                f"The user has {len(target_companies)} target companies: {target_companies}. "
-                f"Search ALL of them — do not skip any."
-            )
-            initial_message = (
-                f"Do a thorough networking search across ALL of these companies: {target_companies}. "
-                f"For each company run at least two searches — one targeting recruiters/talent sourcers "
-                f"and one targeting {', '.join(prefs.target_roles or ['engineers'])}. "
-                f"The goal is 5–10 verified contacts per company."
-            )
+            n = len(target_companies)
+            expand = getattr(prefs, "open_to_similar_companies", False)
+
+            if expand and n < TARGET_COMPANY_COUNT:
+                needed = TARGET_COMPANY_COUNT - n
+                companies_instruction = (
+                    f"The user listed {n} target companies: {target_companies}. "
+                    f"They are open to similar companies. Use your knowledge to identify "
+                    f"{needed} additional companies that are similar in size, stage, or domain. "
+                    f"Combined, search all {TARGET_COMPANY_COUNT} companies — do not skip any."
+                )
+                initial_message = (
+                    f"Do a thorough networking search. Start with the user's {n} listed companies: "
+                    f"{target_companies}. Then identify {needed} similar companies and search those too, "
+                    f"for a total of {TARGET_COMPANY_COUNT} companies. "
+                    f"For each company run at least two searches — one for recruiters/talent sourcers "
+                    f"and one for {', '.join(prefs.target_roles or ['engineers'])}. "
+                    f"Goal: 5–10 verified contacts per company."
+                )
+            else:
+                companies_instruction = (
+                    f"The user has {n} target companies: {target_companies}. "
+                    f"Search ALL of them — do not skip any."
+                )
+                initial_message = (
+                    f"Do a thorough networking search across ALL of these companies: {target_companies}. "
+                    f"For each company run at least two searches — one targeting recruiters/talent sourcers "
+                    f"and one targeting {', '.join(prefs.target_roles or ['engineers'])}. "
+                    f"Goal: 5–10 verified contacts per company."
+                )
         else:
             companies_instruction = (
                 f"The user has no specific target companies. Use your knowledge to identify "
-                f"20–30 companies that actively hire {', '.join(prefs.target_roles)} "
+                f"{TARGET_COMPANY_COUNT} companies that actively hire {', '.join(prefs.target_roles)} "
                 f"at the {prefs.experience_level or 'entry'} level. Mix large tech companies, "
                 f"high-growth startups, and mid-size firms. Search all of them."
             )
             initial_message = (
                 f"Do a thorough networking search for a {prefs.experience_level or 'entry'}-level "
-                f"{', '.join(prefs.target_roles)} job seeker. Pick 20–30 relevant companies and "
-                f"search each one. For every company run at least two searches — one for recruiters "
-                f"and one for engineers/ICs. Goal: 100+ verified contacts total."
+                f"{', '.join(prefs.target_roles)} job seeker. Pick {TARGET_COMPANY_COUNT} relevant "
+                f"companies and search each one. For every company run at least two searches — one for "
+                f"recruiters and one for engineers/ICs. Goal: 100+ verified contacts total."
             )
 
         system_prompt = f"""You are the ApplyNow Networking Agent. Your job is to build a large, high-quality list of networking contacts for the user.

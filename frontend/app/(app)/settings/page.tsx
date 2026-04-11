@@ -120,6 +120,35 @@ export default function SettingsPage() {
           onChange={(v) => update({ target_companies: v })}
           placeholder="e.g. Stripe"
         />
+        {(form.target_companies ?? []).length > 0 && (
+          <label className="flex items-start gap-3 cursor-pointer group">
+            <div className="relative mt-0.5">
+              <input
+                type="checkbox"
+                checked={form.open_to_similar_companies ?? false}
+                onChange={(e) => update({ open_to_similar_companies: e.target.checked })}
+                className="sr-only"
+              />
+              <div className={`h-4 w-4 rounded border transition-colors ${
+                form.open_to_similar_companies
+                  ? "bg-white border-white"
+                  : "border-white/20 bg-white/5 group-hover:border-white/40"
+              }`}>
+                {form.open_to_similar_companies && (
+                  <svg viewBox="0 0 10 8" className="w-full h-full p-0.5" fill="none">
+                    <path d="M1 4l3 3 5-6" stroke="#18181b" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                )}
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-zinc-200">Also target similar companies</p>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                The networking agent will expand your list to ~25 companies by finding ones similar to the companies you listed.
+              </p>
+            </div>
+          </label>
+        )}
         <TagInput
           label="Locations"
           items={form.target_locations ?? []}
