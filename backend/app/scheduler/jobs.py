@@ -97,10 +97,10 @@ def register_jobs():
     )
     scheduler.add_job(
         run_networking_for_all_users,
-        CronTrigger(hour="13,23"),
+        CronTrigger(day_of_week="mon", hour=9, minute=0),  # weekly on Monday morning
         id="networking_global",
         replace_existing=True,
-        misfire_grace_time=300,
+        misfire_grace_time=600,
     )
     scheduler.add_job(
         run_application_agent_for_all_users,

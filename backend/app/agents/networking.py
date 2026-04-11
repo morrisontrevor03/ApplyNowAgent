@@ -60,6 +60,7 @@ TOOLS = [
 
 class NetworkingAgent(BaseAgent):
     agent_type = "networking"
+    max_iterations = 60  # needs many tool calls: 2-3 searches × 20-30 companies + 1 save
 
     async def _execute(self, **kwargs) -> dict:
         user_result = await self.db.execute(select(User).where(User.id == self.user_id))
@@ -82,23 +83,31 @@ class NetworkingAgent(BaseAgent):
         existing_urls = {row[0] for row in existing_result}
 
         if target_companies:
-            companies_instruction = f"Target companies to search: {target_companies}"
+            companies_instruction = (
+                f"The user has {len(target_companies)} target companies: {target_companies}. "
+                f"Search ALL of them — do not skip any."
+            )
             initial_message = (
-                f"Find networking contacts at these companies: {target_companies}. "
-                f"I'm a {prefs.experience_level or 'mid'}-level {', '.join(prefs.target_roles or ['engineer'])}."
+                f"Do a thorough networking search across ALL of these companies: {target_companies}. "
+                f"For each company run at least two searches — one targeting recruiters/talent sourcers "
+                f"and one targeting {', '.join(prefs.target_roles or ['engineers'])}. "
+                f"The goal is 5–10 verified contacts per company."
             )
         else:
             companies_instruction = (
                 f"The user has no specific target companies. Use your knowledge to identify "
-                f"5–8 well-known companies that actively hire {', '.join(prefs.target_roles)} "
-                f"and search for contacts there."
+                f"20–30 companies that actively hire {', '.join(prefs.target_roles)} "
+                f"at the {prefs.experience_level or 'entry'} level. Mix large tech companies, "
+                f"high-growth startups, and mid-size firms. Search all of them."
             )
             initial_message = (
-                f"Find networking contacts relevant to a {prefs.experience_level or 'mid'}-level "
-                f"{', '.join(prefs.target_roles)} job search. Pick 5–8 strong companies to search."
+                f"Do a thorough networking search for a {prefs.experience_level or 'entry'}-level "
+                f"{', '.join(prefs.target_roles)} job seeker. Pick 20–30 relevant companies and "
+                f"search each one. For every company run at least two searches — one for recruiters "
+                f"and one for engineers/ICs. Goal: 100+ verified contacts total."
             )
 
-        system_prompt = f"""You are the ApplyNow Networking Agent. Find professionals at companies for the user to reach out to for coffee chats.
+        system_prompt = f"""You are the ApplyNow Networking Agent. Your job is to build a large, high-quality list of networking contacts for the user.
 
 User profile:
 - Target roles: {prefs.target_roles or ["Software Engineer"]}
@@ -107,48 +116,43 @@ User profile:
 
 {companies_instruction}
 
-Already known contacts (LinkedIn URLs — skip these): {list(existing_urls)[:30]}
+Already known contacts (skip these LinkedIn URLs): {list(existing_urls)[:50]}
 
-## Who to target
-The user is an entry-level/early-career candidate. Target people who are MOST LIKELY TO RESPOND to a cold message from someone junior:
-- Individual contributors: Software Engineers (mid/senior level), Analysts, PMs (non-director)
-- Technical Recruiters and Talent Sourcers (they respond by definition — it's their job)
-- People who graduated within the last 5–8 years (more empathetic to job seekers)
-- Team leads or eng managers at small/mid-size companies
+## Volume goal
+This run should produce as many valid contacts as possible — ideally 50–100+.
+Search every target company. For each company, make multiple google_search_people calls with different title_keywords:
+1. "Recruiter OR Talent Sourcer OR Technical Recruiter"
+2. The user's target role keywords (e.g. "Software Engineer OR SWE")
+3. "Engineering Manager" (for smaller/mid-size companies only)
+
+Do NOT stop after a few companies. Work through all of them before calling save_contacts.
+
+## Who to target — people most likely to respond to an entry-level candidate
+- Technical Recruiters and Talent Sourcers (highest priority — responding is literally their job)
+- Individual contributors: mid/senior engineers, analysts, PMs (non-director)
+- Recent graduates or people 1–5 years into their career (more empathetic)
+- Eng managers at companies with fewer than 500 employees
 
 ## Who to EXCLUDE
-DO NOT save contacts who hold these roles — they are extremely unlikely to respond to entry-level outreach:
-- C-suite (CEO, CTO, CPO, CFO, COO, etc.)
-- VP-level (VP of Engineering, VP of Product, etc.)
-- Director-level (Director of Engineering, Director of Product, etc.)
-- Founders / Co-founders
-- Partners / Principals at VC firms
+- C-suite, VP-level, Director-level, Founders — will not respond
+- Anyone VP+ or C-suite: score 0.0
 
-## Current employment — STRICT RULE
-Google search results are often months or years out of date. You MUST verify current employment from the snippet before saving a contact.
-
-For each result, look at the snippet text carefully:
-- INCLUDE if the snippet clearly shows they currently work at the target company (e.g. "Software Engineer at Stripe", "Recruiter · Stripe", the page title shows "[Name] - [Role] at [Company]")
-- EXCLUDE if the snippet is ambiguous, shows a different current employer, or only mentions the target company in passing (e.g. "previously at...", "ex-Stripe", or the current role is at a different company)
-- When in doubt, EXCLUDE. A false positive (suggesting someone who no longer works there) is much worse than a false negative.
-
-Set the `title` field to exactly what the snippet shows — do not invent or infer a title.
+## Current employment
+Results from Proxycurl are already verified as current employees — trust them.
+If you receive raw Google snippets instead, apply strict judgment: only include someone if the snippet clearly shows they currently work at that company. When in doubt, exclude.
 
 ## Scoring
-Rank each person 0.0–1.0 on how likely a coffee chat leads to a referral or warm intro:
-- Recruiters at the target company: 0.85–0.95
-- Mid/senior ICs in the relevant team: 0.70–0.85
+- Technical Recruiters: 0.85–0.95
+- Mid/senior ICs in a relevant team: 0.70–0.85
 - Eng managers at smaller companies: 0.65–0.80
-- Anyone VP+ or C-suite: score them 0.0 (they will be filtered out)
+- Anyone VP+ or C-suite: 0.0
 
-## Outreach message rules
-- 2–3 sentences max
-- Do NOT mention a specific current job title (it may be wrong)
-- Reference their company or general background instead
-- Be direct about wanting to learn more about the team / culture
-- Do NOT ask for a job or referral directly
+## Outreach messages
+- 2–3 sentences, warm and direct
+- Reference their company, not a specific title (titles may shift)
+- Ask to learn about the team/culture, not for a job or referral
 
-Only include contacts with score >= 0.6. Call save_contacts once with all results.
+Include all contacts with score >= 0.6. Call save_contacts once at the end with all results.
 """
 
         await self.run_tool_loop(system_prompt, initial_message, TOOLS)
