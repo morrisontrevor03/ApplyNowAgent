@@ -69,8 +69,11 @@ class NetworkingAgent(BaseAgent):
 
         prefs_result = await self.db.execute(select(UserPreferences).where(UserPreferences.user_id == self.user_id))
         prefs = prefs_result.scalar_one_or_none()
-        if not prefs or not prefs.target_companies:
-            return {"summary": "No target companies configured"}
+        if not prefs or not prefs.target_roles:
+            return {"summary": "No target roles configured"}
+
+        # If no explicit target companies, search for top companies hiring for their roles
+        target_companies = prefs.target_companies if prefs.target_companies else []
 
         # Existing contacts to avoid duplicates
         existing_result = await self.db.execute(
@@ -78,18 +81,36 @@ class NetworkingAgent(BaseAgent):
         )
         existing_urls = {row[0] for row in existing_result}
 
-        system_prompt = f"""You are the ApplyNow Networking Agent. Find professionals at target companies for the user to reach out to for coffee chats.
+        if target_companies:
+            companies_instruction = f"Target companies to search: {target_companies}"
+            initial_message = (
+                f"Find networking contacts at these companies: {target_companies}. "
+                f"I'm a {prefs.experience_level or 'mid'}-level {', '.join(prefs.target_roles or ['engineer'])}."
+            )
+        else:
+            companies_instruction = (
+                f"The user has no specific target companies. Use your knowledge to identify "
+                f"5–8 well-known companies that actively hire {', '.join(prefs.target_roles)} "
+                f"and search for contacts there."
+            )
+            initial_message = (
+                f"Find networking contacts relevant to a {prefs.experience_level or 'mid'}-level "
+                f"{', '.join(prefs.target_roles)} job search. Pick 5–8 strong companies to search."
+            )
+
+        system_prompt = f"""You are the ApplyNow Networking Agent. Find professionals at companies for the user to reach out to for coffee chats.
 
 User profile:
 - Target roles: {prefs.target_roles or ["Software Engineer"]}
 - Experience level: {prefs.experience_level or "mid"}
+- Preferred locations: {prefs.target_locations or ["anywhere"]}
 
-Target companies: {prefs.target_companies}
+{companies_instruction}
 
 Already known contacts (LinkedIn URLs — skip these): {list(existing_urls)[:30]}
 
 Instructions:
-1. For each target company, call google_search_people to find relevant professionals.
+1. For each company, call google_search_people to find relevant professionals.
 2. Focus on: Engineering Managers, Staff/Principal Engineers, Senior Engineers, Technical Recruiters.
 3. Rank each person 0.0–1.0 on how valuable a coffee chat would be for getting a referral.
 4. Write a personalized 2–3 sentence outreach message per contact.
@@ -100,11 +121,6 @@ Instructions:
 6. Skip contacts whose LinkedIn URL is in the already-known list.
 7. Call save_contacts once with all results.
 """
-
-        initial_message = (
-            f"Find networking contacts at these companies: {prefs.target_companies}. "
-            f"I'm a {prefs.experience_level or 'mid'}-level {', '.join(prefs.target_roles or ['engineer'])}."
-        )
 
         await self.run_tool_loop(system_prompt, initial_message, TOOLS)
 

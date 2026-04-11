@@ -27,7 +27,10 @@ class BaseAgent:
     def __init__(self, db: AsyncSession, user_id: uuid.UUID):
         self.db = db
         self.user_id = user_id
-        self.client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        self.client = anthropic.AsyncAnthropic(
+            api_key=settings.anthropic_api_key,
+            max_retries=6,  # up from default 2; SDK uses exponential backoff on 429/529
+        )
         self._tool_calls_log: list[dict] = []
         self._total_tokens: int = 0
         self._run: AgentRun | None = None
