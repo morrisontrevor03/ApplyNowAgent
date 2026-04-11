@@ -94,37 +94,38 @@ class BaseAgent:
             self._total_tokens += response.usage.input_tokens + response.usage.output_tokens
             messages.append({"role": "assistant", "content": response.content})
 
-            if response.stop_reason == "end_turn":
+            tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+
+            if tool_use_blocks:
+                # Always respond with a tool_result for every tool_use block,
+                # regardless of stop_reason (guards against "max_tokens" edge cases).
+                tool_results = []
+                for block in tool_use_blocks:
+                    self._tool_calls_log.append({
+                        "tool": block.name,
+                        "input": block.input,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+                    try:
+                        result = await self.dispatch_tool(block.name, block.input)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": str(result),
+                        })
+                    except Exception as exc:
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": f"Error: {exc}",
+                            "is_error": True,
+                        })
+                messages.append({"role": "user", "content": tool_results})
+            else:
                 for block in response.content:
                     if hasattr(block, "text"):
                         return block.text
                 return ""
-
-            if response.stop_reason == "tool_use":
-                tool_results = []
-                for block in response.content:
-                    if block.type == "tool_use":
-                        self._tool_calls_log.append({
-                            "tool": block.name,
-                            "input": block.input,
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        })
-                        try:
-                            result = await self.dispatch_tool(block.name, block.input)
-                            tool_results.append({
-                                "type": "tool_result",
-                                "tool_use_id": block.id,
-                                "content": str(result),
-                            })
-                        except Exception as exc:
-                            tool_results.append({
-                                "type": "tool_result",
-                                "tool_use_id": block.id,
-                                "content": f"Error: {exc}",
-                                "is_error": True,
-                            })
-
-                messages.append({"role": "user", "content": tool_results})
 
         return "Max iterations reached"
 
