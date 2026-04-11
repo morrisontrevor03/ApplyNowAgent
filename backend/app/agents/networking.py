@@ -82,6 +82,11 @@ class NetworkingAgent(BaseAgent):
         )
         existing_urls = {row[0] for row in existing_result}
 
+        # Per-run Proxycurl cache: url -> verified profile dict (or None if not a current employee).
+        # Prevents duplicate API calls when the same URL surfaces in multiple company searches.
+        # Seeded with existing DB contacts so we never call Proxycurl for URLs we already have.
+        self._proxycurl_cache: dict[str, dict | None] = {url: None for url in existing_urls}
+
         if target_companies:
             companies_instruction = (
                 f"The user has {len(target_companies)} target companies: {target_companies}. "
@@ -176,7 +181,20 @@ Include all contacts with score >= 0.6. Call save_contacts once at the end with 
         Calls Proxycurl to fetch a real-time LinkedIn profile.
         Returns enriched profile dict if the person currently works at target_company,
         otherwise returns None.
+        Results are cached for the lifetime of the run so duplicate URLs
+        (same person surfacing from multiple company searches) cost zero extra calls.
         """
+        cache = getattr(self, "_proxycurl_cache", {})
+        if linkedin_url in cache:
+            cached = cache[linkedin_url]
+            # Still check company match even on cache hit — same profile may
+            # be a current employee of company A but not company B.
+            if cached is None:
+                return None
+            if target_company.lower() in cached.get("company", "").lower():
+                return cached
+            return None
+
         try:
             resp = await client.get(
                 "https://nubela.co/proxycurl/api/v2/linkedin",
@@ -190,15 +208,26 @@ Include all contacts with score >= 0.6. Call save_contacts once at the end with 
             data = resp.json()
         except Exception as exc:
             logger.warning("Proxycurl error for %s: %s", linkedin_url, exc)
+            cache[linkedin_url] = None
             return None
 
         # Current position = experience entry where ends_at is null
         experiences = data.get("experiences") or []
         current = [e for e in experiences if e.get("ends_at") is None]
         if not current:
+            cache[linkedin_url] = None
             return None
 
-        current_company = current[0].get("company", "")
+        profile = {
+            "first_name": data.get("first_name", ""),
+            "last_name": data.get("last_name", ""),
+            "title": current[0].get("title", data.get("occupation", "")),
+            "company": current[0].get("company", ""),
+            "linkedin_url": linkedin_url,
+        }
+        cache[linkedin_url] = profile  # cache the full profile regardless of company match
+
+        current_company = profile["company"]
         if target_company.lower() not in current_company.lower():
             logger.debug(
                 "Skipping %s — current employer '%s' != '%s'",
@@ -206,13 +235,7 @@ Include all contacts with score >= 0.6. Call save_contacts once at the end with 
             )
             return None
 
-        return {
-            "first_name": data.get("first_name", ""),
-            "last_name": data.get("last_name", ""),
-            "title": current[0].get("title", data.get("occupation", "")),
-            "company": current_company,
-            "linkedin_url": linkedin_url,
-        }
+        return profile
 
     async def _search_people(self, company: str, title_keywords: str) -> str:
         if not settings.google_api_key or not settings.google_search_engine_id:
