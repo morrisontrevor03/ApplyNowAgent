@@ -165,6 +165,51 @@ Only include contacts with score >= 0.6. Call save_contacts once with all result
 
         return f"Unknown tool: {name}"
 
+    async def _verify_linkedin_profile(
+        self, client: httpx.AsyncClient, linkedin_url: str, target_company: str
+    ) -> dict | None:
+        """
+        Calls Proxycurl to fetch a real-time LinkedIn profile.
+        Returns enriched profile dict if the person currently works at target_company,
+        otherwise returns None.
+        """
+        try:
+            resp = await client.get(
+                "https://nubela.co/proxycurl/api/v2/linkedin",
+                params={"url": linkedin_url, "use_cache": "if-present"},
+                headers={"Authorization": f"Bearer {settings.proxycurl_api_key}"},
+                timeout=20,
+            )
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            logger.warning("Proxycurl error for %s: %s", linkedin_url, exc)
+            return None
+
+        # Current position = experience entry where ends_at is null
+        experiences = data.get("experiences") or []
+        current = [e for e in experiences if e.get("ends_at") is None]
+        if not current:
+            return None
+
+        current_company = current[0].get("company", "")
+        if target_company.lower() not in current_company.lower():
+            logger.debug(
+                "Skipping %s — current employer '%s' != '%s'",
+                linkedin_url, current_company, target_company,
+            )
+            return None
+
+        return {
+            "first_name": data.get("first_name", ""),
+            "last_name": data.get("last_name", ""),
+            "title": current[0].get("title", data.get("occupation", "")),
+            "company": current_company,
+            "linkedin_url": linkedin_url,
+        }
+
     async def _search_people(self, company: str, title_keywords: str) -> str:
         if not settings.google_api_key or not settings.google_search_engine_id:
             return json.dumps({"error": "Google API not configured"})
@@ -172,9 +217,9 @@ Only include contacts with score >= 0.6. Call save_contacts once with all result
         # "at Company" biases Google toward profiles where the company appears as a current role
         query = f'site:linkedin.com/in ({title_keywords}) "at {company}"'
 
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15) as google_client:
             try:
-                resp = await client.get(
+                resp = await google_client.get(
                     "https://www.googleapis.com/customsearch/v1",
                     params={
                         "key": settings.google_api_key,
@@ -189,15 +234,29 @@ Only include contacts with score >= 0.6. Call save_contacts once with all result
                 logger.error("Google search error: %s", exc)
                 return json.dumps({"error": str(exc)})
 
-        results = []
-        for item in data.get("items", []):
-            results.append({
-                "title": item.get("title", ""),
-                "url": item.get("link", ""),
-                "snippet": item.get("snippet", ""),
-            })
+        linkedin_urls = [
+            item.get("link", "")
+            for item in data.get("items", [])
+            if "linkedin.com/in/" in item.get("link", "")
+        ]
 
-        return json.dumps({"company": company, "results": results})
+        # If Proxycurl is configured, verify current employment in real-time.
+        # Otherwise fall back to raw Google snippets so the agent still works
+        # without the key (with stale-data caveats).
+        if settings.proxycurl_api_key:
+            verified = []
+            async with httpx.AsyncClient() as px_client:
+                for url in linkedin_urls:
+                    profile = await self._verify_linkedin_profile(px_client, url, company)
+                    if profile:
+                        verified.append(profile)
+            return json.dumps({"company": company, "verified_current_employees": verified})
+        else:
+            results = [
+                {"title": item.get("title", ""), "url": item.get("link", ""), "snippet": item.get("snippet", "")}
+                for item in data.get("items", [])
+            ]
+            return json.dumps({"company": company, "results": results, "warning": "Proxycurl not configured — titles may be stale"})
 
     async def _save_contacts(self, contacts_data: list[dict]) -> str:
         saved = 0
