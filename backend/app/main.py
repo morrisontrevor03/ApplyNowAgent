@@ -21,13 +21,19 @@ async def lifespan(app: FastAPI):
     os.makedirs(settings.upload_dir, exist_ok=True)
 
     # Create tables (handled by Alembic in prod, kept here for dev convenience)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception as e:
+        logger.error(f"DB init failed (tables may not exist yet): {e}")
 
     # Start scheduler
-    register_jobs()
-    scheduler.start()
-    logger.info("Scheduler started")
+    try:
+        register_jobs()
+        scheduler.start()
+        logger.info("Scheduler started")
+    except Exception as e:
+        logger.error(f"Scheduler failed to start: {e}")
 
     yield
 
@@ -44,9 +50,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if settings.environment == "development" else [settings.frontend_url, "http://localhost:3000"],
-    allow_origin_regex=None if settings.environment == "development" else r"https://.*\.vercel\.app",
-    allow_credentials=False if settings.environment == "development" else True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
