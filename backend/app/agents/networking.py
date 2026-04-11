@@ -1,0 +1,195 @@
+import json
+import logging
+from typing import Any
+
+import httpx
+from sqlalchemy import select
+
+from app.agents.base import BaseAgent
+from app.config import settings
+from app.models.contact import Contact
+from app.models.user import User, UserPreferences
+from app.services import quota
+
+logger = logging.getLogger(__name__)
+
+TOOLS = [
+    {
+        "name": "google_search_people",
+        "description": "Search Google for professionals at a specific company using Google Custom Search API.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "company": {"type": "string"},
+                "title_keywords": {"type": "string", "description": "e.g. 'Engineering Manager OR Staff Engineer OR Recruiter'"},
+            },
+            "required": ["company", "title_keywords"],
+        },
+    },
+    {
+        "name": "save_contacts",
+        "description": "Save ranked networking contacts to the database.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "contacts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "company": {"type": "string"},
+                            "first_name": {"type": "string"},
+                            "last_name": {"type": "string"},
+                            "title": {"type": "string"},
+                            "linkedin_url": {"type": "string"},
+                            "seniority": {"type": "string"},
+                            "department": {"type": "string"},
+                            "relevance_score": {"type": "number", "description": "0.0 to 1.0"},
+                            "relevance_reasoning": {"type": "string"},
+                            "outreach_message": {"type": "string", "description": "Personalized 2-3 sentence coffee chat message"},
+                        },
+                        "required": ["company", "first_name", "title", "linkedin_url", "relevance_score", "outreach_message"],
+                    },
+                }
+            },
+            "required": ["contacts"],
+        },
+    },
+]
+
+
+class NetworkingAgent(BaseAgent):
+    agent_type = "networking"
+
+    async def _execute(self, **kwargs) -> dict:
+        user_result = await self.db.execute(select(User).where(User.id == self.user_id))
+        user = user_result.scalar_one_or_none()
+        if not user:
+            return {"summary": "User not found"}
+
+        prefs_result = await self.db.execute(select(UserPreferences).where(UserPreferences.user_id == self.user_id))
+        prefs = prefs_result.scalar_one_or_none()
+        if not prefs or not prefs.target_companies:
+            return {"summary": "No target companies configured"}
+
+        # Existing contacts to avoid duplicates
+        existing_result = await self.db.execute(
+            select(Contact.linkedin_url).where(Contact.user_id == self.user_id, Contact.linkedin_url.isnot(None))
+        )
+        existing_urls = {row[0] for row in existing_result}
+
+        system_prompt = f"""You are the ApplyNow Networking Agent. Find professionals at target companies for the user to reach out to for coffee chats.
+
+User profile:
+- Target roles: {prefs.target_roles or ["Software Engineer"]}
+- Experience level: {prefs.experience_level or "mid"}
+
+Target companies: {prefs.target_companies}
+
+Already known contacts (LinkedIn URLs — skip these): {list(existing_urls)[:30]}
+
+Instructions:
+1. For each target company, call google_search_people to find relevant professionals.
+2. Focus on: Engineering Managers, Staff/Principal Engineers, Senior Engineers, Technical Recruiters.
+3. Rank each person 0.0–1.0 on how valuable a coffee chat would be for getting a referral.
+4. Write a personalized 2–3 sentence outreach message per contact.
+   - Mention something specific about their company or role
+   - Be genuine and direct about wanting to learn more about the team
+   - Do NOT ask for a job directly
+5. Only include contacts with score >= 0.6.
+6. Skip contacts whose LinkedIn URL is in the already-known list.
+7. Call save_contacts once with all results.
+"""
+
+        initial_message = (
+            f"Find networking contacts at these companies: {prefs.target_companies}. "
+            f"I'm a {prefs.experience_level or 'mid'}-level {', '.join(prefs.target_roles or ['engineer'])}."
+        )
+
+        await self.run_tool_loop(system_prompt, initial_message, TOOLS)
+
+        contacts_saved = getattr(self, "_contacts_saved", 0)
+        return {"summary": f"Saved {contacts_saved} new contacts", "contacts_found": contacts_saved}
+
+    async def dispatch_tool(self, name: str, input_data: dict) -> Any:
+        if name == "google_search_people":
+            return await self._search_people(input_data["company"], input_data["title_keywords"])
+
+        if name == "save_contacts":
+            return await self._save_contacts(input_data["contacts"])
+
+        return f"Unknown tool: {name}"
+
+    async def _search_people(self, company: str, title_keywords: str) -> str:
+        if not settings.google_api_key or not settings.google_search_engine_id:
+            return json.dumps({"error": "Google API not configured"})
+
+        query = f'site:linkedin.com/in ({title_keywords}) "{company}"'
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            try:
+                resp = await client.get(
+                    "https://www.googleapis.com/customsearch/v1",
+                    params={
+                        "key": settings.google_api_key,
+                        "cx": settings.google_search_engine_id,
+                        "q": query,
+                        "num": 10,
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as exc:
+                logger.error("Google search error: %s", exc)
+                return json.dumps({"error": str(exc)})
+
+        results = []
+        for item in data.get("items", []):
+            results.append({
+                "title": item.get("title", ""),
+                "url": item.get("link", ""),
+                "snippet": item.get("snippet", ""),
+            })
+
+        return json.dumps({"company": company, "results": results})
+
+    async def _save_contacts(self, contacts_data: list[dict]) -> str:
+        saved = 0
+
+        for item in contacts_data:
+            if not await quota.can_surface_contact(self.db, self.user_id):
+                break
+
+            # De-duplicate by LinkedIn URL
+            linkedin_url = item.get("linkedin_url", "")
+            if linkedin_url:
+                existing = await self.db.execute(
+                    select(Contact).where(
+                        Contact.user_id == self.user_id,
+                        Contact.linkedin_url == linkedin_url,
+                    )
+                )
+                if existing.scalar_one_or_none():
+                    continue
+
+            contact = Contact(
+                user_id=self.user_id,
+                company=item.get("company", ""),
+                first_name=item.get("first_name", ""),
+                last_name=item.get("last_name"),
+                title=item.get("title", ""),
+                linkedin_url=linkedin_url or None,
+                seniority=item.get("seniority"),
+                department=item.get("department"),
+                relevance_score=float(item.get("relevance_score", 0)),
+                relevance_reasoning=item.get("relevance_reasoning"),
+                outreach_message=item.get("outreach_message", ""),
+            )
+            self.db.add(contact)
+            await self.db.flush()
+            await quota.increment_contacts_surfaced(self.db, self.user_id)
+            saved += 1
+
+        await self.db.commit()
+        self._contacts_saved = saved
+        return f"Saved {saved} contacts"

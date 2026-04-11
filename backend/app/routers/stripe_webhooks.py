@@ -1,0 +1,107 @@
+import logging
+
+import stripe
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import settings
+from app.database import get_db
+from app.models.subscription import Subscription
+from app.models.user import User
+
+stripe.api_key = settings.stripe_secret_key
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/stripe", tags=["stripe"])
+
+
+@router.post("/webhook")
+async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, settings.stripe_webhook_secret)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid webhook signature")
+
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        customer_email = session.get("customer_email") or session.get("customer_details", {}).get("email")
+        stripe_customer_id = session.get("customer")
+        stripe_subscription_id = session.get("subscription")
+
+        if customer_email:
+            result = await db.execute(select(User).where(User.email == customer_email))
+            user = result.scalar_one_or_none()
+            if user:
+                sub_result = await db.execute(select(Subscription).where(Subscription.user_id == user.id))
+                sub = sub_result.scalar_one_or_none()
+                if not sub:
+                    sub = Subscription(user_id=user.id)
+                    db.add(sub)
+                sub.plan = "pro"
+                sub.status = "active"
+                sub.stripe_customer_id = stripe_customer_id
+                sub.stripe_subscription_id = stripe_subscription_id
+                await db.commit()
+                logger.info("Upgraded user %s to pro", user.email)
+
+    elif event["type"] in ("customer.subscription.deleted", "customer.subscription.updated"):
+        subscription_obj = event["data"]["object"]
+        stripe_sub_id = subscription_obj.get("id")
+        new_status = subscription_obj.get("status")
+
+        result = await db.execute(
+            select(Subscription).where(Subscription.stripe_subscription_id == stripe_sub_id)
+        )
+        sub = result.scalar_one_or_none()
+        if sub:
+            if new_status in ("canceled", "unpaid", "past_due"):
+                sub.plan = "free"
+                sub.status = new_status
+            else:
+                sub.status = new_status
+            await db.commit()
+            logger.info("Subscription %s status → %s", stripe_sub_id, new_status)
+
+    return {"ok": True}
+
+
+@router.post("/create-checkout-session")
+async def create_checkout_session(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    from app.dependencies import get_current_user
+    from fastapi.security import OAuth2PasswordBearer
+    import jwt as pyjwt
+
+    # Parse bearer token manually (can't use Depends in mixed route)
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    token = auth[7:]
+    try:
+        payload = pyjwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        import uuid
+        user_id = uuid.UUID(payload["sub"])
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    session = stripe.checkout.Session.create(
+        payment_method_types=["card"],
+        mode="subscription",
+        line_items=[{"price": settings.stripe_pro_price_id, "quantity": 1}],
+        customer_email=user.email,
+        success_url=f"{settings.frontend_url}/dashboard?upgraded=true",
+        cancel_url=f"{settings.frontend_url}/pricing",
+    )
+
+    return {"url": session.url}

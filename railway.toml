@@ -1,0 +1,19 @@
+[build]
+  builder = "DOCKERFILE"
+
+[[services]]
+  name = "backend"
+  source = "backend"
+
+  [services.deploy]
+    startCommand = "sh -c 'alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT'"
+    healthcheckPath = "/health"
+    restartPolicyType = "ON_FAILURE"
+    restartPolicyMaxRetries = 5
+
+[[services]]
+  name = "frontend"
+  source = "frontend"
+
+  [services.deploy]
+    startCommand = "node server.js"
