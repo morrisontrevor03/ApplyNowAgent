@@ -1,8 +1,8 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { dashboard, agents, DashboardStats } from "@/lib/api";
-import { Briefcase, Users, FileText, Sparkles, Play } from "lucide-react";
+import { dashboard, agents, DashboardStats, AgentRun } from "@/lib/api";
+import { Briefcase, Users, FileText, Sparkles, Play, CheckCircle2, XCircle, Loader2, Clock } from "lucide-react";
 
 function ScoreRing({ value, limit }: { value: number; limit: number | null }) {
   const pct = limit ? Math.min((value / limit) * 100, 100) : 0;
@@ -34,12 +34,63 @@ function StatCard({ label, value, icon: Icon, sub }: { label: string; value: num
   );
 }
 
+function RunStatusIcon({ status }: { status: string }) {
+  if (status === "completed") return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0" />;
+  if (status === "failed") return <XCircle className="h-3.5 w-3.5 text-red-400 shrink-0" />;
+  return <Loader2 className="h-3.5 w-3.5 text-zinc-400 animate-spin shrink-0" />;
+}
+
+function AgentRunRow({ run }: { run: AgentRun }) {
+  const label: Record<string, string> = {
+    job_scout: "Job Scout",
+    networking: "Networking",
+    application: "Application",
+  };
+  const results = [
+    run.jobs_found > 0 && `${run.jobs_found} job${run.jobs_found > 1 ? "s" : ""}`,
+    run.contacts_found > 0 && `${run.contacts_found} contact${run.contacts_found > 1 ? "s" : ""}`,
+    run.applications_created > 0 && `${run.applications_created} draft${run.applications_created > 1 ? "s" : ""}`,
+  ].filter(Boolean).join(", ");
+
+  const duration = run.duration_ms ? `${(run.duration_ms / 1000).toFixed(1)}s` : null;
+  const when = run.started_at
+    ? new Date(run.started_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : null;
+
+  return (
+    <div className="flex items-start gap-3 py-2.5 border-b border-white/5 last:border-0">
+      <RunStatusIcon status={run.status} />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm text-zinc-200">{label[run.agent_type] ?? run.agent_type}</span>
+          <span className="text-xs text-zinc-600">{run.trigger}</span>
+          {duration && <span className="text-xs text-zinc-600 flex items-center gap-0.5"><Clock className="h-2.5 w-2.5" />{duration}</span>}
+        </div>
+        {run.status === "failed" && run.error_message && (
+          <p className="text-xs text-red-400 mt-0.5 truncate" title={run.error_message}>
+            {run.error_message.length > 80 ? run.error_message.slice(0, 80) + "…" : run.error_message}
+          </p>
+        )}
+        {run.status === "completed" && (
+          <p className="text-xs text-zinc-500 mt-0.5">{results || "No new results"}</p>
+        )}
+      </div>
+      <span className="text-xs text-zinc-600 shrink-0">{when}</span>
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const { data: stats, isLoading } = useQuery<DashboardStats>({
     queryKey: ["dashboard-stats"],
     queryFn: dashboard.stats,
   });
   const { data: activity } = useQuery({ queryKey: ["dashboard-activity"], queryFn: dashboard.activity });
+  const { data: runs } = useQuery<AgentRun[]>({
+    queryKey: ["agent-runs"],
+    queryFn: () => agents.runs(),
+    refetchInterval: 15_000,
+  });
 
   const runAgent = async (fn: () => Promise<unknown>, label: string) => {
     try {
@@ -110,24 +161,19 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Activity */}
-      {activity && activity.length > 0 && (
-        <div className="rounded-xl border border-white/8 bg-white/3 p-5">
-          <h2 className="text-sm font-medium mb-4">Recent Activity</h2>
-          <div className="space-y-2">
-            {activity.map((item, i) => (
-              <div key={i} className="flex items-center justify-between py-1.5 border-b border-white/5 last:border-0">
-                <span className="text-sm text-zinc-300">
-                  {item.type === "jobs_found" && `${item.count} new job${item.count > 1 ? "s" : ""} found`}
-                  {item.type === "contacts_found" && `${item.count} new contact${item.count > 1 ? "s" : ""} discovered`}
-                  {item.type === "drafts_created" && `${item.count} application draft${item.count > 1 ? "s" : ""} created`}
-                </span>
-                <span className="text-xs text-zinc-500">{item.timestamp ? new Date(item.timestamp).toLocaleDateString() : ""}</span>
-              </div>
+      {/* Agent runs */}
+      <div className="rounded-xl border border-white/8 bg-white/3 p-5">
+        <h2 className="text-sm font-medium mb-4">Agent Runs</h2>
+        {!runs || runs.length === 0 ? (
+          <p className="text-sm text-zinc-500">No runs yet. Click a button above to trigger an agent manually.</p>
+        ) : (
+          <div>
+            {runs.slice(0, 15).map((run) => (
+              <AgentRunRow key={run.id} run={run} />
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
