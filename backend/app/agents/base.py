@@ -111,16 +111,20 @@ class BaseAgent:
                     })
                     try:
                         result = await self.dispatch_tool(block.name, block.input)
+                        result_str = str(result)
+                        self._tool_calls_log[-1]["output"] = result_str[:500]
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
-                            "content": str(result),
+                            "content": result_str,
                         })
                     except Exception as exc:
+                        err_str = f"Error: {exc}"
+                        self._tool_calls_log[-1]["output"] = err_str
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
-                            "content": f"Error: {exc}",
+                            "content": err_str,
                             "is_error": True,
                         })
                 messages.append({"role": "user", "content": tool_results})

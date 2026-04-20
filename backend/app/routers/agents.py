@@ -1,7 +1,9 @@
+import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db, AsyncSessionLocal
 from app.dependencies import get_current_user
 from app.models.agent_run import AgentRun
@@ -44,6 +46,49 @@ async def trigger_application_agent(
     from app.agents.application import ApplicationAgent
     background_tasks.add_task(_run_agent, ApplicationAgent, current_user.id, "manual")
     return {"ok": True, "message": "Application Agent started"}
+
+
+@router.get("/test-apollo")
+async def test_apollo(current_user: User = Depends(get_current_user)):
+    """Quick sanity-check: hits Apollo with a single Stripe recruiter search and returns raw results."""
+    if not settings.apollo_api_key:
+        return {"error": "APOLLO_API_KEY not configured"}
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(
+                "https://api.apollo.io/v1/mixed_people/search",
+                headers={
+                    "Content-Type": "application/json",
+                    "Cache-Control": "no-cache",
+                    "X-Api-Key": settings.apollo_api_key,
+                },
+                json={
+                    "q_organization_name": "Stripe",
+                    "person_titles": ["Recruiter", "Technical Recruiter"],
+                    "person_seniorities": ["entry", "senior", "manager"],
+                    "per_page": 5,
+                    "page": 1,
+                },
+            )
+            data = resp.json()
+            people = data.get("people") or []
+            return {
+                "status_code": resp.status_code,
+                "people_count": len(people),
+                "pagination": data.get("pagination"),
+                "sample": [
+                    {
+                        "name": f"{p.get('first_name')} {p.get('last_name')}",
+                        "title": p.get("title"),
+                        "email": p.get("email"),
+                        "linkedin": p.get("linkedin_url"),
+                    }
+                    for p in people[:3]
+                ],
+                "raw_keys": list(data.keys()),
+            }
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 @router.get("/runs")
