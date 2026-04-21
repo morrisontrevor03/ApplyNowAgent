@@ -255,7 +255,6 @@ Call save_contacts ONCE at the end with all contacts that score >= 0.6.
                         {
                             "bool": {
                                 "should": title_clauses,
-                                "minimum_should_match": 1,
                             }
                         },
                     ],

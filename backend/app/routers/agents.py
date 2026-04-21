@@ -71,8 +71,7 @@ async def test_pdl(current_user: User = Depends(get_current_user)):
                                         "should": [
                                             {"match_phrase": {"job_title": "recruiter"}},
                                             {"match_phrase": {"job_title": "technical recruiter"}},
-                                        ],
-                                        "minimum_should_match": 1,
+                                        ]
                                     }
                                 },
                             ]
