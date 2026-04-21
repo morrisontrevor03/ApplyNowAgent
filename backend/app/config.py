@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # People Data Labs (people search for networking agent)
     pdl_api_key: str = ""
 
+    # Exa.ai (neural web search for LinkedIn profile discovery)
+    exa_api_key: str = ""
+
     # Email
     resend_api_key: str = ""
     resend_from_email: str = "noreply@apply-now-ai.com"

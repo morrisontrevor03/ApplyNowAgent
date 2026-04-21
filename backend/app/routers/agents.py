@@ -48,55 +48,40 @@ async def trigger_application_agent(
     return {"ok": True, "message": "Application Agent started"}
 
 
-@router.get("/test-pdl")
-async def test_pdl(current_user: User = Depends(get_current_user)):
-    """Quick sanity-check: hits PDL with a single Stripe recruiter search and returns raw results."""
-    if not settings.pdl_api_key:
-        return {"error": "PDL_API_KEY not configured"}
+@router.get("/test-exa")
+async def test_exa(current_user: User = Depends(get_current_user)):
+    """Quick sanity-check: hits Exa with a Stripe recruiter search and returns raw results."""
+    if not settings.exa_api_key:
+        return {"error": "EXA_API_KEY not configured"}
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(
-                "https://api.peopledatalabs.com/v5/person/search",
+                "https://api.exa.ai/search",
                 headers={
+                    "x-api-key": settings.exa_api_key,
                     "Content-Type": "application/json",
-                    "X-Api-Key": settings.pdl_api_key,
                 },
                 json={
-                    "query": {
-                        "bool": {
-                            "must": [
-                                {"term": {"job_company_name": "stripe"}},
-                                {
-                                    "bool": {
-                                        "should": [
-                                            {"match_phrase": {"job_title": "recruiter"}},
-                                            {"match_phrase": {"job_title": "technical recruiter"}},
-                                        ]
-                                    }
-                                },
-                            ]
-                        }
-                    },
-                    "size": 5,
-                    "pretty": False,
+                    "query": '"Recruiter" OR "Technical Recruiter" at Stripe',
+                    "numResults": 5,
+                    "includeDomains": ["linkedin.com"],
+                    "type": "neural",
+                    "contents": {"text": {"maxCharacters": 200}},
                 },
             )
             data = resp.json()
-            people = data.get("data") or []
+            results = data.get("results") or []
             return {
                 "status_code": resp.status_code,
-                "people_count": len(people),
-                "total": data.get("total"),
+                "result_count": len(results),
                 "error": data.get("error"),
                 "sample": [
                     {
-                        "name": f"{p.get('first_name')} {p.get('last_name')}",
-                        "title": p.get("job_title"),
-                        "company": p.get("job_company_name"),
-                        "linkedin": p.get("linkedin_url"),
-                        "levels": p.get("job_title_levels"),
+                        "title": r.get("title"),
+                        "url": r.get("url"),
+                        "snippet": (r.get("text") or "")[:150],
                     }
-                    for p in people[:3]
+                    for r in results[:3]
                 ],
             }
     except Exception as exc:

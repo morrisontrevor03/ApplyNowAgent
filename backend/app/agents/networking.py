@@ -16,19 +16,16 @@ logger = logging.getLogger(__name__)
 
 TARGET_COMPANY_COUNT = 25
 
-# Job title levels to exclude — senior leadership won't respond to cold messages.
-PDL_EXCLUDED_LEVELS = ["director", "vp", "c_suite", "owner", "partner", "founder"]
-
-PDL_PEOPLE_SEARCH_URL = "https://api.peopledatalabs.com/v5/person/search"
+EXA_SEARCH_URL = "https://api.exa.ai/search"
 
 # ── Tool definitions ───────────────────────────────────────────────────────
 
 TOOL_FIND_PEOPLE = {
     "name": "find_people_at_company",
     "description": (
-        "Search People Data Labs for current employees at a company by role. "
-        "Returns real people with verified current titles, LinkedIn URLs, and email addresses. "
-        "Senior leaders (VP+, C-suite, Directors) are automatically excluded. "
+        "Search LinkedIn via Exa for current employees at a company by role. "
+        "Returns real LinkedIn profiles with names, current titles, and profile URLs. "
+        "Each result includes a snippet — only include people where the snippet confirms they currently work at the company. "
         "Call this once per company per role type."
     ),
     "input_schema": {
@@ -133,8 +130,8 @@ class NetworkingAgent(BaseAgent):
         )
         self._seen_urls: set[str] = {row[0] for row in existing_result}
 
-        use_pdl = bool(settings.pdl_api_key)
-        tools = [TOOL_FIND_PEOPLE if use_pdl else TOOL_GOOGLE_FALLBACK, TOOL_SAVE_CONTACTS]
+        use_exa = bool(settings.exa_api_key)
+        tools = [TOOL_FIND_PEOPLE if use_exa else TOOL_GOOGLE_FALLBACK, TOOL_SAVE_CONTACTS]
 
         # ── Company instructions ───────────────────────────────────────────
 
@@ -176,8 +173,10 @@ class NetworkingAgent(BaseAgent):
             )
 
         data_note = (
-            "PDL data is sourced directly — job_company_name reflects CURRENT employer. Trust the results."
-            if use_pdl else
+            "Results come from LinkedIn profiles via Exa search. Each person has a 'snippet' field. "
+            "Only include someone if their snippet confirms they currently work at that company. "
+            "Discard results where the snippet shows a past role or a different company."
+            if use_exa else
             "Fallback: Google snippets may be stale. Only include someone if the snippet clearly shows "
             "they currently work at that company."
         )
@@ -237,7 +236,7 @@ If fewer than 5 real contacts were found across all companies, still call save_c
 
     async def dispatch_tool(self, name: str, input_data: dict) -> Any:
         if name == "find_people_at_company":
-            return await self._pdl_search(
+            return await self._exa_search(
                 input_data["company_name"],
                 input_data["titles"],
                 int(input_data.get("max_results", 10)),
@@ -248,104 +247,83 @@ If fewer than 5 real contacts were found across all companies, still call save_c
             return await self._save_contacts(input_data["contacts"])
         return f"Unknown tool: {name}"
 
-    # ── PDL people search ──────────────────────────────────────────────────
+    # ── Exa LinkedIn search ────────────────────────────────────────────────
 
-    async def _pdl_search(self, company_name: str, titles: list[str], max_results: int) -> str:
-        # Build title match clauses (any of the provided titles)
-        title_clauses = [{"match_phrase": {"job_title": t.lower()}} for t in titles]
+    async def _exa_search(self, company_name: str, titles: list[str], max_results: int) -> str:
+        # Build a query like: "Recruiter" OR "Technical Recruiter" at Stripe
+        title_part = " OR ".join(f'"{t}"' for t in titles[:3])
+        query = f'{title_part} at {company_name}'
 
-        query = {
-            "bool": {
-                "must": [
-                    {"term": {"job_company_name": company_name.lower()}},
-                    {
-                        "bool": {
-                            "should": title_clauses,
-                        }
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(
+                    EXA_SEARCH_URL,
+                    headers={
+                        "x-api-key": settings.exa_api_key,
+                        "Content-Type": "application/json",
                     },
-                ],
-                "must_not": [
-                    {"terms": {"job_title_levels": PDL_EXCLUDED_LEVELS}}
-                ],
-            }
-        }
-
-        payload = {
-            "query": query,
-            "size": min(max_results, 25),
-            "pretty": False,
-        }
-
-        # Retry up to 3 times on 429 with exponential backoff
-        for attempt in range(3):
-            try:
-                async with httpx.AsyncClient(timeout=20) as client:
-                    resp = await client.post(
-                        PDL_PEOPLE_SEARCH_URL,
-                        headers={
-                            "Content-Type": "application/json",
-                            "X-Api-Key": settings.pdl_api_key,
-                        },
-                        json=payload,
-                    )
-                    if resp.status_code == 429:
-                        wait = 2 ** attempt * 2  # 2s, 4s, 8s
-                        logger.warning("PDL 429 for '%s', retrying in %ds", company_name, wait)
-                        await asyncio.sleep(wait)
-                        continue
-                    resp.raise_for_status()
-                    data = resp.json()
-                    break
-            except Exception as exc:
-                if attempt == 2:
-                    logger.warning("PDL search error for '%s': %s", company_name, exc)
-                    return json.dumps({"company": company_name, "people": [], "error": str(exc)})
-                await asyncio.sleep(2 ** attempt * 2)
-        else:
-            return json.dumps({"company": company_name, "people": [], "error": "rate limited after retries"})
+                    json={
+                        "query": query,
+                        "numResults": min(max_results, 10),
+                        "includeDomains": ["linkedin.com"],
+                        "type": "neural",
+                        "contents": {"text": {"maxCharacters": 300}},
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as exc:
+            logger.warning("Exa search error for '%s': %s", company_name, exc)
+            return json.dumps({"company": company_name, "people": [], "error": str(exc)})
 
         people = []
-        for p in (data.get("data") or []):
-            linkedin_url = p.get("linkedin_url") or ""
-            # Normalise to https
-            if linkedin_url and linkedin_url.startswith("http://"):
-                linkedin_url = linkedin_url.replace("http://", "https://", 1)
-
-            if linkedin_url and linkedin_url in self._seen_urls:
+        for result in data.get("results") or []:
+            url = result.get("url", "")
+            if "linkedin.com/in/" not in url:
+                continue
+            if url in self._seen_urls:
                 continue
 
-            # PDL stores emails as a list of objects: [{"address": "...", "type": "..."}]
-            emails = p.get("emails") or []
-            email = ""
-            for e in emails:
-                if isinstance(e, dict) and e.get("address"):
-                    email = e["address"]
-                    break
-            if not email:
-                email = p.get("work_email") or ""
+            # Normalise to https
+            if url.startswith("http://"):
+                url = url.replace("http://", "https://", 1)
 
-            # PDL job_title_levels is a list; take first entry as seniority
-            levels = p.get("job_title_levels") or []
-            seniority = levels[0] if levels else ""
+            # Parse name + title from LinkedIn page title
+            # Format: "Name - Title at Company | LinkedIn"
+            page_title = result.get("title", "")
+            name, job_title = "", ""
+            if " - " in page_title:
+                parts = page_title.split(" - ", 1)
+                name = parts[0].strip()
+                rest = parts[1]
+                # Strip trailing " | LinkedIn"
+                rest = rest.split(" | LinkedIn")[0].strip()
+                if " at " in rest.lower():
+                    job_title = rest[: rest.lower().index(" at ")].strip()
+                else:
+                    job_title = rest.strip()
+
+            name_parts = name.split()
+            first_name = name_parts[0] if name_parts else ""
+            last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
 
             person = {
-                "first_name":   p.get("first_name", ""),
-                "last_name":    p.get("last_name", ""),
-                "title":        p.get("job_title", ""),
-                "company":      p.get("job_company_name") or company_name,
-                "linkedin_url": linkedin_url,
-                "email":        email,
-                "seniority":    seniority,
+                "first_name":   first_name,
+                "last_name":    last_name,
+                "title":        job_title,
+                "company":      company_name,
+                "linkedin_url": url,
+                "email":        "",
+                "seniority":    "",
+                # Snippet lets Claude verify current employment before saving
+                "snippet":      result.get("text", "")[:300],
             }
 
-            if linkedin_url:
-                self._seen_urls.add(linkedin_url)
-
+            self._seen_urls.add(url)
             people.append(person)
 
-        logger.info("PDL '%s' titles=%s -> %d people", company_name, titles, len(people))
-        # Rate-limit: PDL free tier allows ~1 req/sec
-        await asyncio.sleep(1.2)
+        logger.info("Exa '%s' titles=%s -> %d profiles", company_name, titles, len(people))
+        await asyncio.sleep(0.5)  # light rate-limiting
         return json.dumps({"company": company_name, "titles_searched": titles, "people": people})
 
     # ── Google fallback ────────────────────────────────────────────────────
