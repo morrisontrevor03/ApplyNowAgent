@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from typing import Any
@@ -323,6 +324,8 @@ Call save_contacts ONCE at the end with all contacts that score >= 0.6.
             people.append(person)
 
         logger.info("PDL '%s' titles=%s -> %d people", company_name, titles, len(people))
+        # Rate-limit: PDL free tier allows ~1 req/sec
+        await asyncio.sleep(1.2)
         return json.dumps({"company": company_name, "titles_searched": titles, "people": people})
 
     # ── Google fallback ────────────────────────────────────────────────────
