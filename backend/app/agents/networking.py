@@ -15,18 +15,17 @@ logger = logging.getLogger(__name__)
 
 TARGET_COMPANY_COUNT = 25
 
-# Seniority levels we want — ICs, recruiters, and managers at smaller companies.
-# Explicitly excludes c_suite, vp, head, director, partner, owner, founder.
-APOLLO_TARGET_SENIORITIES = ["entry", "senior", "manager"]
+# Job title levels to exclude — senior leadership won't respond to cold messages.
+PDL_EXCLUDED_LEVELS = ["director", "vp", "c_suite", "owner", "partner", "founder"]
 
-APOLLO_PEOPLE_SEARCH_URL = "https://api.apollo.io/v1/mixed_people/search"
+PDL_PEOPLE_SEARCH_URL = "https://api.peopledatalabs.com/v5/person/search"
 
 # ── Tool definitions ───────────────────────────────────────────────────────
 
 TOOL_FIND_PEOPLE = {
     "name": "find_people_at_company",
     "description": (
-        "Search Apollo for current employees at a company by role. "
+        "Search People Data Labs for current employees at a company by role. "
         "Returns real people with verified current titles, LinkedIn URLs, and email addresses. "
         "Senior leaders (VP+, C-suite, Directors) are automatically excluded. "
         "Call this once per company per role type."
@@ -59,7 +58,7 @@ TOOL_FIND_PEOPLE = {
 
 TOOL_GOOGLE_FALLBACK = {
     "name": "google_search_people",
-    "description": "Fallback: search Google for professionals at a company. Less accurate — use only when Apollo is unavailable.",
+    "description": "Fallback: search Google for professionals at a company. Less accurate — use only when PDL is unavailable.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -91,7 +90,7 @@ TOOL_SAVE_CONTACTS = {
                         "department":          {"type": "string"},
                         "relevance_score":     {"type": "number", "description": "0.0 to 1.0"},
                         "relevance_reasoning": {"type": "string"},
-                        "outreach_message":    {"type": "string", "description": "Warm 2–3 sentence coffee-chat message"},
+                        "outreach_message":    {"type": "string", "description": "Warm 2-3 sentence coffee-chat message"},
                     },
                     "required": ["company", "first_name", "title", "relevance_score", "outreach_message"],
                 },
@@ -104,7 +103,7 @@ TOOL_SAVE_CONTACTS = {
 
 class NetworkingAgent(BaseAgent):
     agent_type = "networking"
-    # 2 calls/company × 25 companies + 1 save = ~51; give headroom
+    # 2 calls/company x 25 companies + 1 save = ~51; give headroom
     max_iterations = 80
 
     # ── Entry point ────────────────────────────────────────────────────────
@@ -133,8 +132,8 @@ class NetworkingAgent(BaseAgent):
         )
         self._seen_urls: set[str] = {row[0] for row in existing_result}
 
-        use_apollo = bool(settings.apollo_api_key)
-        tools = [TOOL_FIND_PEOPLE if use_apollo else TOOL_GOOGLE_FALLBACK, TOOL_SAVE_CONTACTS]
+        use_pdl = bool(settings.pdl_api_key)
+        tools = [TOOL_FIND_PEOPLE if use_pdl else TOOL_GOOGLE_FALLBACK, TOOL_SAVE_CONTACTS]
 
         # ── Company instructions ───────────────────────────────────────────
 
@@ -176,8 +175,8 @@ class NetworkingAgent(BaseAgent):
             )
 
         data_note = (
-            "Apollo data is sourced directly — titles and current employment are accurate. Trust the results."
-            if use_apollo else
+            "PDL data is sourced directly — job_company_name reflects CURRENT employer. Trust the results."
+            if use_pdl else
             "Fallback: Google snippets may be stale. Only include someone if the snippet clearly shows "
             "they currently work at that company."
         )
@@ -201,9 +200,9 @@ class NetworkingAgent(BaseAgent):
 ## Who to prioritise
 The user is entry-level. Target people most likely to respond to a cold message:
 
-1. **Technical Recruiters / Talent Sourcers** — score 0.85–0.95 (responding is their job)
-2. **Mid / Senior Individual Contributors** in the relevant team — score 0.70–0.85
-3. **Engineering Managers at smaller companies** (<500 employees) — score 0.65–0.80
+1. **Technical Recruiters / Talent Sourcers** - score 0.85-0.95 (responding is their job)
+2. **Mid / Senior Individual Contributors** in the relevant team - score 0.70-0.85
+3. **Engineering Managers at smaller companies** (<500 employees) - score 0.65-0.80
 
 VP+, Directors, C-suite, and Founders are already filtered out at the API level.
 If any slip through, score them 0.0 and exclude them.
@@ -214,13 +213,12 @@ Do not stop early. Two find_people_at_company calls per company minimum.
 Goal: 50+ contacts total.
 
 ## Outreach messages
-- 2–3 sentences, warm and direct
-- Reference the company or team — not a specific title
+- 2-3 sentences, warm and direct
+- Reference the company or team - not a specific title
 - Ask to learn about the team / culture
 - Never directly ask for a job or referral
 
 Call save_contacts ONCE at the end with all contacts that score >= 0.6.
-If a contact has an email address from the search results, include it in the outreach_message as a postscript or note it in relevance_reasoning.
 """
 
         await self.run_tool_loop(system_prompt, initial_message, tools)
@@ -232,7 +230,7 @@ If a contact has an email address from the search results, include it in the out
 
     async def dispatch_tool(self, name: str, input_data: dict) -> Any:
         if name == "find_people_at_company":
-            return await self._apollo_search(
+            return await self._pdl_search(
                 input_data["company_name"],
                 input_data["titles"],
                 int(input_data.get("max_results", 10)),
@@ -243,34 +241,51 @@ If a contact has an email address from the search results, include it in the out
             return await self._save_contacts(input_data["contacts"])
         return f"Unknown tool: {name}"
 
-    # ── Apollo people search ───────────────────────────────────────────────
+    # ── PDL people search ──────────────────────────────────────────────────
 
-    async def _apollo_search(self, company_name: str, titles: list[str], max_results: int) -> str:
+    async def _pdl_search(self, company_name: str, titles: list[str], max_results: int) -> str:
         try:
+            # Build title match clauses (any of the provided titles)
+            title_clauses = [{"match_phrase": {"job_title": t.lower()}} for t in titles]
+
+            query = {
+                "bool": {
+                    "must": [
+                        {"term": {"job_company_name": company_name.lower()}},
+                        {
+                            "bool": {
+                                "should": title_clauses,
+                                "minimum_should_match": 1,
+                            }
+                        },
+                    ],
+                    "must_not": [
+                        {"terms": {"job_title_levels": PDL_EXCLUDED_LEVELS}}
+                    ],
+                }
+            }
+
             async with httpx.AsyncClient(timeout=20) as client:
                 resp = await client.post(
-                    APOLLO_PEOPLE_SEARCH_URL,
+                    PDL_PEOPLE_SEARCH_URL,
                     headers={
                         "Content-Type": "application/json",
-                        "Cache-Control": "no-cache",
-                        "X-Api-Key": settings.apollo_api_key,
+                        "X-Api-Key": settings.pdl_api_key,
                     },
                     json={
-                        "q_organization_name": company_name,
-                        "person_titles": titles,
-                        "person_seniorities": APOLLO_TARGET_SENIORITIES,
-                        "per_page": min(max_results, 25),
-                        "page": 1,
+                        "query": query,
+                        "size": min(max_results, 25),
+                        "pretty": False,
                     },
                 )
                 resp.raise_for_status()
                 data = resp.json()
         except Exception as exc:
-            logger.warning("Apollo search error for '%s': %s", company_name, exc)
+            logger.warning("PDL search error for '%s': %s", company_name, exc)
             return json.dumps({"error": str(exc)})
 
         people = []
-        for p in data.get("people") or []:
+        for p in (data.get("data") or []):
             linkedin_url = p.get("linkedin_url") or ""
             # Normalise to https
             if linkedin_url and linkedin_url.startswith("http://"):
@@ -279,16 +294,28 @@ If a contact has an email address from the search results, include it in the out
             if linkedin_url and linkedin_url in self._seen_urls:
                 continue
 
-            current_org = (p.get("organization") or {}).get("name", company_name)
+            # PDL stores emails as a list of objects: [{"address": "...", "type": "..."}]
+            emails = p.get("emails") or []
+            email = ""
+            for e in emails:
+                if isinstance(e, dict) and e.get("address"):
+                    email = e["address"]
+                    break
+            if not email:
+                email = p.get("work_email") or ""
+
+            # PDL job_title_levels is a list; take first entry as seniority
+            levels = p.get("job_title_levels") or []
+            seniority = levels[0] if levels else ""
 
             person = {
                 "first_name":   p.get("first_name", ""),
                 "last_name":    p.get("last_name", ""),
-                "title":        p.get("title", ""),
-                "company":      current_org,
+                "title":        p.get("job_title", ""),
+                "company":      p.get("job_company_name") or company_name,
                 "linkedin_url": linkedin_url,
-                "email":        p.get("email") or "",
-                "seniority":    p.get("seniority", ""),
+                "email":        email,
+                "seniority":    seniority,
             }
 
             if linkedin_url:
@@ -296,14 +323,14 @@ If a contact has an email address from the search results, include it in the out
 
             people.append(person)
 
-        logger.info("Apollo '%s' titles=%s → %d people", company_name, titles, len(people))
+        logger.info("PDL '%s' titles=%s -> %d people", company_name, titles, len(people))
         return json.dumps({"company": company_name, "titles_searched": titles, "people": people})
 
     # ── Google fallback ────────────────────────────────────────────────────
 
     async def _google_fallback(self, company: str, title_keywords: str) -> str:
         if not settings.google_api_key or not settings.google_search_engine_id:
-            return json.dumps({"error": "Neither Apollo nor Google API is configured"})
+            return json.dumps({"error": "Neither PDL nor Google API is configured"})
 
         query = f'site:linkedin.com/in ({title_keywords}) "at {company}"'
         async with httpx.AsyncClient(timeout=15) as client:
@@ -332,7 +359,7 @@ If a contact has an email address from the search results, include it in the out
         return json.dumps({
             "company": company,
             "results": results,
-            "warning": "Apollo not configured — only include contacts where snippet confirms current employment",
+            "warning": "PDL not configured — only include contacts where snippet confirms current employment",
         })
 
     # ── Save contacts ──────────────────────────────────────────────────────

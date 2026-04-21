@@ -24,8 +24,8 @@ class Settings(BaseSettings):
     google_api_key: str = ""
     google_search_engine_id: str = ""
 
-    # Apollo.io (people search for networking agent)
-    apollo_api_key: str = ""
+    # People Data Labs (people search for networking agent)
+    pdl_api_key: str = ""
 
     # Email
     resend_api_key: str = ""

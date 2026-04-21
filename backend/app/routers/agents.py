@@ -48,46 +48,57 @@ async def trigger_application_agent(
     return {"ok": True, "message": "Application Agent started"}
 
 
-@router.get("/test-apollo")
-async def test_apollo(current_user: User = Depends(get_current_user)):
-    """Quick sanity-check: hits Apollo with a single Stripe recruiter search and returns raw results."""
-    if not settings.apollo_api_key:
-        return {"error": "APOLLO_API_KEY not configured"}
+@router.get("/test-pdl")
+async def test_pdl(current_user: User = Depends(get_current_user)):
+    """Quick sanity-check: hits PDL with a single Stripe recruiter search and returns raw results."""
+    if not settings.pdl_api_key:
+        return {"error": "PDL_API_KEY not configured"}
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(
-                "https://api.apollo.io/v1/mixed_people/search",
+                "https://api.peopledatalabs.com/v5/person/search",
                 headers={
                     "Content-Type": "application/json",
-                    "Cache-Control": "no-cache",
-                    "X-Api-Key": settings.apollo_api_key,
+                    "X-Api-Key": settings.pdl_api_key,
                 },
                 json={
-                    "q_organization_name": "Stripe",
-                    "person_titles": ["Recruiter", "Technical Recruiter"],
-                    "person_seniorities": ["entry", "senior", "manager"],
-                    "per_page": 5,
-                    "page": 1,
+                    "query": {
+                        "bool": {
+                            "must": [
+                                {"term": {"job_company_name": "stripe"}},
+                                {
+                                    "bool": {
+                                        "should": [
+                                            {"match_phrase": {"job_title": "recruiter"}},
+                                            {"match_phrase": {"job_title": "technical recruiter"}},
+                                        ],
+                                        "minimum_should_match": 1,
+                                    }
+                                },
+                            ]
+                        }
+                    },
+                    "size": 5,
+                    "pretty": False,
                 },
             )
             data = resp.json()
-            people = data.get("people") or []
+            people = data.get("data") or []
             return {
                 "status_code": resp.status_code,
                 "people_count": len(people),
-                "pagination": data.get("pagination"),
+                "total": data.get("total"),
                 "error": data.get("error"),
-                "error_code": data.get("error_code"),
                 "sample": [
                     {
                         "name": f"{p.get('first_name')} {p.get('last_name')}",
-                        "title": p.get("title"),
-                        "email": p.get("email"),
+                        "title": p.get("job_title"),
+                        "company": p.get("job_company_name"),
                         "linkedin": p.get("linkedin_url"),
+                        "levels": p.get("job_title_levels"),
                     }
                     for p in people[:3]
                 ],
-                "raw_keys": list(data.keys()),
             }
     except Exception as exc:
         return {"error": str(exc)}
