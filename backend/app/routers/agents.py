@@ -76,6 +76,8 @@ async def test_apollo(current_user: User = Depends(get_current_user)):
                 "status_code": resp.status_code,
                 "people_count": len(people),
                 "pagination": data.get("pagination"),
+                "error": data.get("error"),
+                "error_code": data.get("error_code"),
                 "sample": [
                     {
                         "name": f"{p.get('first_name')} {p.get('last_name')}",
