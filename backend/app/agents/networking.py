@@ -219,7 +219,13 @@ Goal: 50+ contacts total.
 - Ask to learn about the team / culture
 - Never directly ask for a job or referral
 
-Call save_contacts ONCE at the end with all contacts that score >= 0.6.
+## CRITICAL RULES
+- ONLY save people returned by find_people_at_company. NEVER invent, guess, or fabricate contacts.
+- If find_people_at_company returns an empty list or error for a company, skip that company — do not make up names.
+- Every contact in save_contacts MUST have a real linkedin_url from the tool results.
+
+Call save_contacts ONCE at the end with all real contacts that score >= 0.6.
+If fewer than 5 real contacts were found across all companies, still call save_contacts with whatever real people were returned — do not invent extras.
 """
 
         await self.run_tool_loop(system_prompt, initial_message, tools)
@@ -245,44 +251,58 @@ Call save_contacts ONCE at the end with all contacts that score >= 0.6.
     # ── PDL people search ──────────────────────────────────────────────────
 
     async def _pdl_search(self, company_name: str, titles: list[str], max_results: int) -> str:
-        try:
-            # Build title match clauses (any of the provided titles)
-            title_clauses = [{"match_phrase": {"job_title": t.lower()}} for t in titles]
+        # Build title match clauses (any of the provided titles)
+        title_clauses = [{"match_phrase": {"job_title": t.lower()}} for t in titles]
 
-            query = {
-                "bool": {
-                    "must": [
-                        {"term": {"job_company_name": company_name.lower()}},
-                        {
-                            "bool": {
-                                "should": title_clauses,
-                            }
-                        },
-                    ],
-                    "must_not": [
-                        {"terms": {"job_title_levels": PDL_EXCLUDED_LEVELS}}
-                    ],
-                }
+        query = {
+            "bool": {
+                "must": [
+                    {"term": {"job_company_name": company_name.lower()}},
+                    {
+                        "bool": {
+                            "should": title_clauses,
+                        }
+                    },
+                ],
+                "must_not": [
+                    {"terms": {"job_title_levels": PDL_EXCLUDED_LEVELS}}
+                ],
             }
+        }
 
-            async with httpx.AsyncClient(timeout=20) as client:
-                resp = await client.post(
-                    PDL_PEOPLE_SEARCH_URL,
-                    headers={
-                        "Content-Type": "application/json",
-                        "X-Api-Key": settings.pdl_api_key,
-                    },
-                    json={
-                        "query": query,
-                        "size": min(max_results, 25),
-                        "pretty": False,
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-        except Exception as exc:
-            logger.warning("PDL search error for '%s': %s", company_name, exc)
-            return json.dumps({"error": str(exc)})
+        payload = {
+            "query": query,
+            "size": min(max_results, 25),
+            "pretty": False,
+        }
+
+        # Retry up to 3 times on 429 with exponential backoff
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=20) as client:
+                    resp = await client.post(
+                        PDL_PEOPLE_SEARCH_URL,
+                        headers={
+                            "Content-Type": "application/json",
+                            "X-Api-Key": settings.pdl_api_key,
+                        },
+                        json=payload,
+                    )
+                    if resp.status_code == 429:
+                        wait = 2 ** attempt * 2  # 2s, 4s, 8s
+                        logger.warning("PDL 429 for '%s', retrying in %ds", company_name, wait)
+                        await asyncio.sleep(wait)
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    break
+            except Exception as exc:
+                if attempt == 2:
+                    logger.warning("PDL search error for '%s': %s", company_name, exc)
+                    return json.dumps({"company": company_name, "people": [], "error": str(exc)})
+                await asyncio.sleep(2 ** attempt * 2)
+        else:
+            return json.dumps({"company": company_name, "people": [], "error": "rate limited after retries"})
 
         people = []
         for p in (data.get("data") or []):
