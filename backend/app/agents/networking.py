@@ -16,14 +16,14 @@ logger = logging.getLogger(__name__)
 
 TARGET_COMPANY_COUNT = 25
 
-EXA_SEARCH_URL = "https://api.exa.ai/search"
+BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 
 # ── Tool definitions ───────────────────────────────────────────────────────
 
 TOOL_FIND_PEOPLE = {
     "name": "find_people_at_company",
     "description": (
-        "Search LinkedIn via Exa for current employees at a company by role. "
+        "Search LinkedIn via Brave for current employees at a company by role. "
         "Returns real LinkedIn profiles with names, current titles, and profile URLs. "
         "Each result includes a snippet — only include people where the snippet confirms they currently work at the company. "
         "Call this once per company per role type."
@@ -130,8 +130,8 @@ class NetworkingAgent(BaseAgent):
         )
         self._seen_urls: set[str] = {row[0] for row in existing_result}
 
-        use_exa = bool(settings.exa_api_key)
-        tools = [TOOL_FIND_PEOPLE if use_exa else TOOL_GOOGLE_FALLBACK, TOOL_SAVE_CONTACTS]
+        use_brave = bool(settings.brave_api_key)
+        tools = [TOOL_FIND_PEOPLE if use_brave else TOOL_GOOGLE_FALLBACK, TOOL_SAVE_CONTACTS]
 
         # ── Company instructions ───────────────────────────────────────────
 
@@ -173,10 +173,10 @@ class NetworkingAgent(BaseAgent):
             )
 
         data_note = (
-            "Results come from LinkedIn profiles via Exa search. Each person has a 'snippet' field. "
+            "Results come from LinkedIn profiles via Brave Search. Each person has a 'snippet' field. "
             "Only include someone if their snippet confirms they currently work at that company. "
             "Discard results where the snippet shows a past role or a different company."
-            if use_exa else
+            if use_brave else
             "Fallback: Google snippets may be stale. Only include someone if the snippet clearly shows "
             "they currently work at that company."
         )
@@ -236,7 +236,7 @@ If fewer than 5 real contacts were found across all companies, still call save_c
 
     async def dispatch_tool(self, name: str, input_data: dict) -> Any:
         if name == "find_people_at_company":
-            return await self._exa_search(
+            return await self._brave_search(
                 input_data["company_name"],
                 input_data["titles"],
                 int(input_data.get("max_results", 10)),
@@ -247,44 +247,38 @@ If fewer than 5 real contacts were found across all companies, still call save_c
             return await self._save_contacts(input_data["contacts"])
         return f"Unknown tool: {name}"
 
-    # ── Exa LinkedIn search ────────────────────────────────────────────────
+    # ── Brave Search LinkedIn discovery ───────────────────────────────────
 
-    async def _exa_search(self, company_name: str, titles: list[str], max_results: int) -> str:
-        # Build a query like: "Recruiter" OR "Technical Recruiter" at Stripe
+    async def _brave_search(self, company_name: str, titles: list[str], max_results: int) -> str:
+        # e.g. site:linkedin.com/in "Recruiter" OR "Technical Recruiter" "Stripe"
         title_part = " OR ".join(f'"{t}"' for t in titles[:3])
-        query = f'{title_part} at {company_name}'
+        query = f'site:linkedin.com/in {title_part} "{company_name}"'
 
         try:
             async with httpx.AsyncClient(timeout=20) as client:
-                resp = await client.post(
-                    EXA_SEARCH_URL,
+                resp = await client.get(
+                    BRAVE_SEARCH_URL,
                     headers={
-                        "x-api-key": settings.exa_api_key,
-                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                        "Accept-Encoding": "gzip",
+                        "X-Subscription-Token": settings.brave_api_key,
                     },
-                    json={
-                        "query": query,
-                        "numResults": min(max_results, 10),
-                        "includeDomains": ["linkedin.com"],
-                        "type": "neural",
-                        "contents": {"text": {"maxCharacters": 300}},
-                    },
+                    params={"q": query, "count": min(max_results, 10)},
                 )
                 resp.raise_for_status()
                 data = resp.json()
         except Exception as exc:
-            logger.warning("Exa search error for '%s': %s", company_name, exc)
+            logger.warning("Brave search error for '%s': %s", company_name, exc)
             return json.dumps({"company": company_name, "people": [], "error": str(exc)})
 
         people = []
-        for result in data.get("results") or []:
+        for result in (data.get("web") or {}).get("results") or []:
             url = result.get("url", "")
             if "linkedin.com/in/" not in url:
                 continue
             if url in self._seen_urls:
                 continue
 
-            # Normalise to https
             if url.startswith("http://"):
                 url = url.replace("http://", "https://", 1)
 
@@ -295,9 +289,7 @@ If fewer than 5 real contacts were found across all companies, still call save_c
             if " - " in page_title:
                 parts = page_title.split(" - ", 1)
                 name = parts[0].strip()
-                rest = parts[1]
-                # Strip trailing " | LinkedIn"
-                rest = rest.split(" | LinkedIn")[0].strip()
+                rest = parts[1].split(" | LinkedIn")[0].strip()
                 if " at " in rest.lower():
                     job_title = rest[: rest.lower().index(" at ")].strip()
                 else:
@@ -315,15 +307,14 @@ If fewer than 5 real contacts were found across all companies, still call save_c
                 "linkedin_url": url,
                 "email":        "",
                 "seniority":    "",
-                # Snippet lets Claude verify current employment before saving
-                "snippet":      result.get("text", "")[:300],
+                "snippet":      result.get("description", "")[:300],
             }
 
             self._seen_urls.add(url)
             people.append(person)
 
-        logger.info("Exa '%s' titles=%s -> %d profiles", company_name, titles, len(people))
-        await asyncio.sleep(0.5)  # light rate-limiting
+        logger.info("Brave '%s' titles=%s -> %d profiles", company_name, titles, len(people))
+        await asyncio.sleep(0.3)
         return json.dumps({"company": company_name, "titles_searched": titles, "people": people})
 
     # ── Google fallback ────────────────────────────────────────────────────

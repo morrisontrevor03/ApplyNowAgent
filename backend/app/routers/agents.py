@@ -48,39 +48,29 @@ async def trigger_application_agent(
     return {"ok": True, "message": "Application Agent started"}
 
 
-@router.get("/test-exa")
-async def test_exa(current_user: User = Depends(get_current_user)):
-    """Quick sanity-check: hits Exa with a Stripe recruiter search and returns raw results."""
-    if not settings.exa_api_key:
-        return {"error": "EXA_API_KEY not configured"}
+@router.get("/test-brave")
+async def test_brave(current_user: User = Depends(get_current_user)):
+    """Quick sanity-check: hits Brave Search with a Stripe recruiter query."""
+    if not settings.brave_api_key:
+        return {"error": "BRAVE_API_KEY not configured"}
     try:
         async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.post(
-                "https://api.exa.ai/search",
+            resp = await client.get(
+                "https://api.search.brave.com/res/v1/web/search",
                 headers={
-                    "x-api-key": settings.exa_api_key,
-                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "Accept-Encoding": "gzip",
+                    "X-Subscription-Token": settings.brave_api_key,
                 },
-                json={
-                    "query": '"Recruiter" OR "Technical Recruiter" at Stripe',
-                    "numResults": 5,
-                    "includeDomains": ["linkedin.com"],
-                    "type": "neural",
-                    "contents": {"text": {"maxCharacters": 200}},
-                },
+                params={"q": 'site:linkedin.com/in "Recruiter" "Stripe"', "count": 5},
             )
             data = resp.json()
-            results = data.get("results") or []
+            results = (data.get("web") or {}).get("results") or []
             return {
                 "status_code": resp.status_code,
                 "result_count": len(results),
-                "error": data.get("error"),
                 "sample": [
-                    {
-                        "title": r.get("title"),
-                        "url": r.get("url"),
-                        "snippet": (r.get("text") or "")[:150],
-                    }
+                    {"title": r.get("title"), "url": r.get("url"), "snippet": r.get("description", "")[:150]}
                     for r in results[:3]
                 ],
             }

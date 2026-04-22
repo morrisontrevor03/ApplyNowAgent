@@ -24,11 +24,8 @@ class Settings(BaseSettings):
     google_api_key: str = ""
     google_search_engine_id: str = ""
 
-    # People Data Labs (people search for networking agent)
-    pdl_api_key: str = ""
-
-    # Exa.ai (neural web search for LinkedIn profile discovery)
-    exa_api_key: str = ""
+    # Brave Search (LinkedIn profile discovery for networking agent)
+    brave_api_key: str = ""
 
     # Email
     resend_api_key: str = ""
