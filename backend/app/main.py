@@ -48,15 +48,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-ALLOWED_ORIGINS = [
+_extra_origin = settings.frontend_url or ""
+ALLOWED_ORIGINS = list({
     "http://localhost:3000",
     "https://apply-now-agent.vercel.app",
-    settings.frontend_url,
-]
+    *([_extra_origin] if _extra_origin else []),
+})
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=list(set(ALLOWED_ORIGINS)),
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
