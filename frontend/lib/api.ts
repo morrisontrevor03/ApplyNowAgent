@@ -43,6 +43,7 @@ export const auth = {
       body: JSON.stringify({ email, password }),
     }),
   me: () => request<{ id: string; email: string; full_name: string | null }>("/api/auth/me"),
+  logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
 };
 
 // Dashboard
@@ -89,12 +90,14 @@ export const contacts = {
   get: (id: string) => request<Contact>(`/api/contacts/${id}`),
   update: (id: string, data: Partial<Contact>) =>
     request<Contact>(`/api/contacts/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  delete: (id: string) => request<void>(`/api/contacts/${id}`, { method: "DELETE" }),
   draftMessage: (id: string) =>
     request<Contact>(`/api/contacts/${id}/draft-message`, { method: "POST" }),
 };
 
 // Resume
 export const resume = {
+  delete: (id: string) => request<void>(`/api/resume/${id}`, { method: "DELETE" }),
   upload: (file: File) => {
     const token = getToken();
     const fd = new FormData();
@@ -130,6 +133,8 @@ export const agents = {
 export const stripe = {
   createCheckout: () =>
     request<{ url: string }>("/api/stripe/create-checkout-session", { method: "POST" }),
+  cancelSubscription: () =>
+    request<{ ok: boolean }>("/api/stripe/cancel-subscription", { method: "POST" }),
 };
 
 // Types
@@ -139,6 +144,7 @@ export interface DashboardStats {
   applications_count: number;
   contacts_count: number;
   plan: "free" | "pro";
+  target_roles_configured: boolean;
   usage: {
     jobs_surfaced: number;
     contacts_surfaced: number;

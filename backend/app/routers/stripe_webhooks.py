@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
+from app.dependencies import get_current_user
 from app.models.subscription import Subscription
 from app.models.user import User
 
@@ -105,3 +106,30 @@ async def create_checkout_session(
     )
 
     return {"url": session.url}
+
+
+@router.post("/cancel-subscription")
+async def cancel_subscription(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Subscription).where(Subscription.user_id == current_user.id))
+    sub = result.scalar_one_or_none()
+
+    if not sub or sub.plan != "pro":
+        raise HTTPException(status_code=400, detail="No active Pro subscription to cancel")
+
+    if not sub.stripe_subscription_id:
+        raise HTTPException(status_code=400, detail="No Stripe subscription ID on record")
+
+    try:
+        stripe.Subscription.cancel(sub.stripe_subscription_id)
+    except stripe.StripeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    sub.plan = "free"
+    sub.status = "canceled"
+    await db.commit()
+
+    logger.info("User %s cancelled Pro subscription %s", current_user.email, sub.stripe_subscription_id)
+    return {"ok": True}

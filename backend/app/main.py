@@ -15,8 +15,35 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _validate_env() -> None:
+    warnings: list[str] = []
+    errors: list[str] = []
+
+    if not settings.anthropic_api_key:
+        (errors if settings.environment == "production" else warnings).append("ANTHROPIC_API_KEY")
+    if not settings.brave_api_key:
+        warnings.append("BRAVE_API_KEY (networking agent will not work)")
+
+    if settings.environment == "production":
+        if settings.secret_key == "dev-secret-key-change-in-production":
+            errors.append("SECRET_KEY (still using dev default — set a secure random value)")
+        if not settings.stripe_secret_key:
+            errors.append("STRIPE_SECRET_KEY")
+        if not settings.stripe_webhook_secret:
+            errors.append("STRIPE_WEBHOOK_SECRET")
+        if not settings.stripe_pro_price_id:
+            errors.append("STRIPE_PRO_PRICE_ID")
+
+    for w in warnings:
+        logger.warning("Missing env var: %s", w)
+    if errors:
+        raise RuntimeError("Missing required environment variables: " + ", ".join(errors))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _validate_env()
+
     # Create upload directory
     os.makedirs(settings.upload_dir, exist_ok=True)
 

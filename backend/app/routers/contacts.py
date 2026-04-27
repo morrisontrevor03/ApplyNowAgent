@@ -124,6 +124,22 @@ async def draft_outreach_message(
     return _serialize(c)
 
 
+@router.delete("/{contact_id}", status_code=204)
+async def delete_contact(
+    contact_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.user_id == current_user.id)
+    )
+    c = result.scalar_one_or_none()
+    if not c:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    await db.delete(c)
+    await db.commit()
+
+
 def _serialize(c: Contact) -> dict:
     return {
         "id": str(c.id),

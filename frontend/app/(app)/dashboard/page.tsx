@@ -2,7 +2,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { dashboard, agents, DashboardStats, AgentRun } from "@/lib/api";
-import { Briefcase, Users, FileText, Sparkles, Play, CheckCircle2, XCircle, Loader2, Clock } from "lucide-react";
+import { Briefcase, Users, FileText, Sparkles, Play, CheckCircle2, XCircle, Loader2, Clock, AlertTriangle } from "lucide-react";
 
 function ScoreRing({ value, limit }: { value: number; limit: number | null }) {
   const pct = limit ? Math.min((value / limit) * 100, 100) : 0;
@@ -109,6 +109,25 @@ export default function DashboardPage() {
         <h1 className="text-xl font-semibold">Dashboard</h1>
         <p className="text-sm text-zinc-400 mt-1">Your agents are working 24/7</p>
       </div>
+
+      {/* Setup banner — shown when target roles not yet configured */}
+      {stats && !stats.target_roles_configured && (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-400/20 bg-amber-400/8 p-4">
+          <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-amber-300">Finish setting up your profile</p>
+            <p className="text-xs text-amber-400/80 mt-0.5">
+              Add your target roles and companies in Settings so your agents know what to look for.
+            </p>
+          </div>
+          <a
+            href="/settings"
+            className="shrink-0 text-xs font-medium text-amber-300 bg-amber-400/15 hover:bg-amber-400/25 rounded-lg px-3 py-1.5 transition-colors"
+          >
+            Go to Settings
+          </a>
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">

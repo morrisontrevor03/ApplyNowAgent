@@ -9,7 +9,7 @@ from app.models.application import Application
 from app.models.contact import Contact
 from app.models.job import Job
 from app.models.subscription import MonthlyUsage, Subscription
-from app.models.user import User
+from app.models.user import User, UserPreferences
 from app.config import settings as app_settings
 from datetime import datetime, timezone
 
@@ -52,12 +52,20 @@ async def get_stats(
     sub = sub_result.scalar_one_or_none()
     plan = sub.plan if sub else "free"
 
+    # Setup completeness
+    prefs_result = await db.execute(
+        select(UserPreferences).where(UserPreferences.user_id == current_user.id)
+    )
+    prefs = prefs_result.scalar_one_or_none()
+    target_roles_configured = bool(prefs and prefs.target_roles)
+
     return {
         "jobs_count": jobs_count or 0,
         "new_jobs_count": new_jobs_count or 0,
         "applications_count": applications_count or 0,
         "contacts_count": contacts_count or 0,
         "plan": plan,
+        "target_roles_configured": target_roles_configured,
         "usage": {
             "jobs_surfaced": usage.jobs_surfaced if usage else 0,
             "contacts_surfaced": usage.contacts_surfaced if usage else 0,

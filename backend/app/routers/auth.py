@@ -51,3 +51,9 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
 @router.get("/me", response_model=UserResponse)
 async def me(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+@router.post("/logout")
+async def logout(current_user: User = Depends(get_current_user)):
+    # JWT is stateless — actual invalidation happens client-side by clearing the token.
+    return {"ok": True}

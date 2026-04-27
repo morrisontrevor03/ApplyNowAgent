@@ -75,6 +75,27 @@ async def upload_resume(
     }
 
 
+@router.delete("/{resume_id}", status_code=204)
+async def delete_resume(
+    resume_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Resume).where(Resume.id == resume_id, Resume.user_id == current_user.id)
+    )
+    resume = result.scalar_one_or_none()
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    import os as _os
+    if resume.file_path and _os.path.exists(resume.file_path):
+        _os.remove(resume.file_path)
+
+    await db.delete(resume)
+    await db.commit()
+
+
 @router.get("/active")
 async def get_active_resume(
     current_user: User = Depends(get_current_user),
