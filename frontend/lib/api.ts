@@ -89,6 +89,8 @@ export const contacts = {
   get: (id: string) => request<Contact>(`/api/contacts/${id}`),
   update: (id: string, data: Partial<Contact>) =>
     request<Contact>(`/api/contacts/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  draftMessage: (id: string) =>
+    request<Contact>(`/api/contacts/${id}/draft-message`, { method: "POST" }),
 };
 
 // Resume

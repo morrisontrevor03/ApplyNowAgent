@@ -1,14 +1,16 @@
 import uuid
 
+import anthropic
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.contact import Contact
-from app.models.user import User
+from app.models.user import User, UserPreferences
 
 router = APIRouter(prefix="/api/contacts", tags=["contacts"])
 
@@ -76,6 +78,47 @@ async def update_contact(
     for field, value in body.model_dump(exclude_none=True).items():
         setattr(c, field, value)
 
+    await db.commit()
+    await db.refresh(c)
+    return _serialize(c)
+
+
+@router.post("/{contact_id}/draft-message")
+async def draft_outreach_message(
+    contact_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.user_id == current_user.id)
+    )
+    c = result.scalar_one_or_none()
+    if not c:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    prefs_result = await db.execute(
+        select(UserPreferences).where(UserPreferences.user_id == current_user.id)
+    )
+    prefs = prefs_result.scalar_one_or_none()
+
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    prompt = (
+        f"Write a warm, concise LinkedIn cold outreach message (2-3 sentences) from a "
+        f"{getattr(prefs, 'experience_level', 'entry') or 'entry'}-level job seeker "
+        f"targeting {', '.join(getattr(prefs, 'target_roles', ['software engineering']) or ['software engineering'])} roles "
+        f"to {c.first_name} {c.last_name or ''}, who is a {c.title} at {c.company}.\n\n"
+        f"Rules: reference the company or team (not their title), ask to learn about the team or culture, "
+        f"never ask for a job or referral directly. Return only the message text, no subject line."
+    )
+
+    resp = await client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    message = resp.content[0].text.strip()
+
+    c.outreach_message = message
     await db.commit()
     await db.refresh(c)
     return _serialize(c)

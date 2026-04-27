@@ -198,6 +198,17 @@ function ContactDrawer({
     },
   });
 
+  const draftMessage = useMutation({
+    mutationFn: () => contactsApi.draftMessage(contact.id),
+    onSuccess: (updated) => {
+      setMessage(updated.outreach_message ?? "");
+      setMessageDirty(false);
+      qc.invalidateQueries({ queryKey: ["contacts"] });
+      toast.success("Message drafted");
+    },
+    onError: () => toast.error("Failed to draft message"),
+  });
+
   const stage = stageConfig(contact.outreach_status);
   const score = contact.relevance_score ?? 0;
   const fullName = [contact.first_name, contact.last_name].filter(Boolean).join(" ") || "Unknown";
@@ -301,22 +312,31 @@ function ContactDrawer({
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="text-xs font-medium text-zinc-400">Outreach message</label>
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(message);
-                  toast.success("Copied");
-                }}
-                className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
-              >
-                <Copy className="h-3 w-3" /> Copy
-              </button>
+              <div className="flex items-center gap-2">
+                {message && (
+                  <button
+                    onClick={() => { navigator.clipboard.writeText(message); toast.success("Copied"); }}
+                    className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                  >
+                    <Copy className="h-3 w-3" /> Copy
+                  </button>
+                )}
+                <button
+                  onClick={() => draftMessage.mutate()}
+                  disabled={draftMessage.isPending}
+                  className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors disabled:opacity-50"
+                >
+                  <FileEdit className="h-3 w-3" />
+                  {draftMessage.isPending ? "Drafting…" : message ? "Redraft" : "Draft message"}
+                </button>
+              </div>
             </div>
             <textarea
               value={message}
               onChange={(e) => { setMessage(e.target.value); setMessageDirty(true); }}
               rows={5}
               className="w-full rounded-lg border border-white/8 bg-white/5 px-3 py-2.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-white/20 resize-none leading-relaxed"
-              placeholder="Outreach message will appear here after the agent runs…"
+              placeholder="Click 'Draft message' to generate a personalised outreach…"
             />
             {messageDirty && (
               <button
