@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from typing import Any
+import re
 
 import httpx
 from sqlalchemy import select
@@ -15,96 +15,18 @@ from app.services import quota
 logger = logging.getLogger(__name__)
 
 TARGET_COMPANY_COUNT = 25
-
+RECRUITER_TITLES = ["Recruiter", "Technical Recruiter", "Talent Sourcer", "University Recruiter"]
 BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 
-# ── Tool definitions ───────────────────────────────────────────────────────
-
-TOOL_FIND_PEOPLE = {
-    "name": "find_people_at_company",
-    "description": (
-        "Search LinkedIn via Brave for current employees at a company by role. "
-        "Returns real LinkedIn profiles with names, current titles, and profile URLs. "
-        "Each result includes a snippet — only include people where the snippet confirms they currently work at the company. "
-        "Call this once per company per role type."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "company_name": {
-                "type": "string",
-                "description": "Company name as commonly known (e.g. 'Stripe', 'Airbnb')",
-            },
-            "titles": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": (
-                    "Job titles to search for. Use one focused group per call. "
-                    "Examples: ['Recruiter', 'Technical Recruiter', 'Talent Sourcer'] "
-                    "or ['Software Engineer', 'SWE', 'Software Developer']"
-                ),
-            },
-            "max_results": {
-                "type": "integer",
-                "default": 10,
-                "description": "Max people to return (default 10)",
-            },
-        },
-        "required": ["company_name", "titles"],
-    },
-}
-
-TOOL_GOOGLE_FALLBACK = {
-    "name": "google_search_people",
-    "description": "Fallback: search Google for professionals at a company. Less accurate — use only when PDL is unavailable.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "company": {"type": "string"},
-            "title_keywords": {"type": "string"},
-        },
-        "required": ["company", "title_keywords"],
-    },
-}
-
-TOOL_SAVE_CONTACTS = {
-    "name": "save_contacts",
-    "description": "Save all networking contacts to the database. Call ONCE at the end with every contact collected.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "contacts": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "company":             {"type": "string"},
-                        "first_name":          {"type": "string"},
-                        "last_name":           {"type": "string"},
-                        "title":               {"type": "string"},
-                        "linkedin_url":        {"type": "string"},
-                        "email":               {"type": "string"},
-                        "seniority":           {"type": "string"},
-                        "department":          {"type": "string"},
-                        "relevance_score":     {"type": "number", "description": "0.0 to 1.0"},
-                        "relevance_reasoning": {"type": "string"},
-                        "outreach_message":    {"type": "string", "description": "Warm 2-3 sentence coffee-chat message"},
-                    },
-                    "required": ["company", "first_name", "title", "relevance_score", "outreach_message"],
-                },
-            }
-        },
-        "required": ["contacts"],
-    },
+EXCLUDE_TITLE_KEYWORDS = {
+    "vp", "vice president", "director", "chief", "ceo", "cto", "coo", "cfo",
+    "founder", "owner", "partner", "head of",
 }
 
 
 class NetworkingAgent(BaseAgent):
     agent_type = "networking"
-    # 2 calls/company x 25 companies + 1 save = ~51; give headroom
-    max_iterations = 80
-
-    # ── Entry point ────────────────────────────────────────────────────────
+    max_iterations = 3  # only used for company selection
 
     async def _execute(self, **kwargs) -> dict:
         user_result = await self.db.execute(select(User).where(User.id == self.user_id))
@@ -119,9 +41,6 @@ class NetworkingAgent(BaseAgent):
         if not prefs or not prefs.target_roles:
             return {"summary": "No target roles configured"}
 
-        target_companies = prefs.target_companies or []
-
-        # Track URLs seen this run (seeded from DB) to avoid duplicates
         existing_result = await self.db.execute(
             select(Contact.linkedin_url).where(
                 Contact.user_id == self.user_id,
@@ -130,132 +49,78 @@ class NetworkingAgent(BaseAgent):
         )
         self._seen_urls: set[str] = {row[0] for row in existing_result}
 
-        use_brave = bool(settings.brave_api_key)
-        tools = [TOOL_FIND_PEOPLE if use_brave else TOOL_GOOGLE_FALLBACK, TOOL_SAVE_CONTACTS]
+        # Step 1: resolve company list (1 Claude call if needed)
+        companies = await self._resolve_companies(prefs)
+        logger.info("Networking: searching %d companies", len(companies))
 
-        # ── Company instructions ───────────────────────────────────────────
+        # Step 2: search all companies directly — no Claude loop
+        raw_contacts: list[dict] = []
+        for company in companies:
+            for titles in [RECRUITER_TITLES, prefs.target_roles[:4]]:
+                results = await self._brave_search(company, titles, max_results=5)
+                raw_contacts.extend(results)
 
-        n = len(target_companies)
+        logger.info("Networking: %d raw profiles collected", len(raw_contacts))
+        if not raw_contacts:
+            return {"summary": "No profiles found via search", "contacts_found": 0}
+
+        # Step 3: score + write outreach in batches (~5 Claude calls total)
+        scored = await self._score_and_generate_outreach(raw_contacts, prefs)
+        logger.info("Networking: %d contacts scored >= 0.6", len(scored))
+
+        # Step 4: save
+        saved = await self._save_contacts_list(scored)
+        return {"summary": f"Saved {saved} new contacts", "contacts_found": saved}
+
+    # ── Company resolution ─────────────────────────────────────────────────
+
+    async def _resolve_companies(self, prefs: UserPreferences) -> list[str]:
+        companies = list(prefs.target_companies or [])
         expand = bool(getattr(prefs, "open_to_similar_companies", False))
 
-        if target_companies:
-            if expand and n < TARGET_COMPANY_COUNT:
-                needed = TARGET_COMPANY_COUNT - n
-                companies_instruction = (
-                    f"The user listed {n} companies: {target_companies}. "
-                    f"They are open to similar companies. Identify {needed} additional companies "
-                    f"similar in domain, size, or tech stack, for a combined total of {TARGET_COMPANY_COUNT}."
-                )
-                initial_message = (
-                    f"Build a networking list. Start with {target_companies}, then add {needed} similar "
-                    f"companies (total {TARGET_COMPANY_COUNT}). For EACH company call find_people_at_company "
-                    f"twice: once with titles=['Recruiter','Technical Recruiter','Talent Sourcer'] and once "
-                    f"with titles={prefs.target_roles[:3]}. Goal: 50+ contacts saved."
-                )
-            else:
-                companies_instruction = f"The user's {n} target companies: {target_companies}. Search all of them."
-                initial_message = (
-                    f"Build a networking list for {target_companies}. For EACH company call "
-                    f"find_people_at_company twice: once with titles=['Recruiter','Technical Recruiter','Talent Sourcer'] "
-                    f"and once with titles={prefs.target_roles[:3]}. Goal: 50+ contacts saved."
-                )
-        else:
-            companies_instruction = (
-                f"No target companies set. Choose {TARGET_COMPANY_COUNT} companies that actively "
-                f"hire {', '.join(prefs.target_roles)} at the {prefs.experience_level or 'entry'} level. "
-                f"Mix large tech, high-growth startups, and mid-size product companies."
-            )
-            initial_message = (
-                f"Build a networking list for a {prefs.experience_level or 'entry'}-level "
-                f"{', '.join(prefs.target_roles)} job seeker. Pick {TARGET_COMPANY_COUNT} companies, "
-                f"then for each call find_people_at_company twice: once for recruiters and once for "
-                f"{prefs.target_roles[0]}. Goal: 50+ contacts saved."
-            )
+        if companies and not expand:
+            return companies[:TARGET_COMPANY_COUNT]
 
-        data_note = (
-            "Results come from LinkedIn profiles via Brave Search. Each person has a 'snippet' field. "
-            "Only include someone if their snippet confirms they currently work at that company. "
-            "Discard results where the snippet shows a past role or a different company."
-            if use_brave else
-            "Fallback: Google snippets may be stale. Only include someone if the snippet clearly shows "
-            "they currently work at that company."
+        needed = TARGET_COMPANY_COUNT - len(companies)
+        if needed <= 0:
+            return companies[:TARGET_COMPANY_COUNT]
+
+        context = (
+            f"The user already targets: {companies}. Add {needed} similar companies "
+            f"in the same domain or tech stack."
+            if companies else
+            f"Pick {needed} companies that actively hire {prefs.target_roles} at "
+            f"{prefs.experience_level or 'entry'} level. Mix large tech, high-growth "
+            f"startups, and mid-size product companies."
         )
 
-        system_prompt = f"""You are the ApplyNow Networking Agent. Build a large, high-quality networking list for the user.
-
-## User profile
-- Target roles: {prefs.target_roles}
-- Experience level: {prefs.experience_level or "entry"}
-- Preferred locations: {prefs.target_locations or ["anywhere"]}
-
-## Companies
-{companies_instruction}
-
-## Skip these LinkedIn URLs (already in database)
-{list(self._seen_urls)[:60]}
-
-## Data
-{data_note}
-
-## Who to prioritise
-The user is entry-level. Target people most likely to respond to a cold message:
-
-1. **Technical Recruiters / Talent Sourcers** - score 0.85-0.95 (responding is their job)
-2. **Mid / Senior Individual Contributors** in the relevant team - score 0.70-0.85
-3. **Engineering Managers at smaller companies** (<500 employees) - score 0.65-0.80
-
-VP+, Directors, C-suite, and Founders are already filtered out at the API level.
-If any slip through, score them 0.0 and exclude them.
-
-## Volume
-Work through ALL {TARGET_COMPANY_COUNT} companies before calling save_contacts.
-Do not stop early. Two find_people_at_company calls per company minimum.
-Goal: 50+ contacts total.
-
-## Outreach messages
-- 2-3 sentences, warm and direct
-- Reference the company or team - not a specific title
-- Ask to learn about the team / culture
-- Never directly ask for a job or referral
-
-## CRITICAL RULES
-- ONLY save people returned by find_people_at_company. NEVER invent, guess, or fabricate contacts.
-- If find_people_at_company returns an empty list or error for a company, skip that company — do not make up names.
-- Every contact in save_contacts MUST have a real linkedin_url from the tool results.
-
-Call save_contacts ONCE at the end with all real contacts that score >= 0.6.
-If fewer than 5 real contacts were found across all companies, still call save_contacts with whatever real people were returned — do not invent extras.
-"""
-
-        await self.run_tool_loop(system_prompt, initial_message, tools)
-
-        contacts_saved = getattr(self, "_contacts_saved", 0)
-        return {"summary": f"Saved {contacts_saved} new contacts", "contacts_found": contacts_saved}
-
-    # ── Tool dispatch ──────────────────────────────────────────────────────
-
-    async def dispatch_tool(self, name: str, input_data: dict) -> Any:
-        if name == "find_people_at_company":
-            return await self._brave_search(
-                input_data["company_name"],
-                input_data["titles"],
-                int(input_data.get("max_results", 10)),
+        try:
+            resp = await self.client.messages.create(
+                model=self.model,
+                max_tokens=400,
+                messages=[{
+                    "role": "user",
+                    "content": f"{context}\n\nReturn ONLY a JSON array of company names, nothing else. Example: [\"Stripe\", \"Plaid\"]",
+                }],
             )
-        if name == "google_search_people":
-            return await self._google_fallback(input_data["company"], input_data["title_keywords"])
-        if name == "save_contacts":
-            return await self._save_contacts(input_data["contacts"])
-        return f"Unknown tool: {name}"
+            text = resp.content[0].text.strip()
+            match = re.search(r'\[.*?\]', text, re.DOTALL)
+            if match:
+                new_companies = json.loads(match.group())
+                companies = companies + [c for c in new_companies if c not in companies]
+        except Exception as exc:
+            logger.warning("Company selection failed: %s", exc)
 
-    # ── Brave Search LinkedIn discovery ───────────────────────────────────
+        return companies[:TARGET_COMPANY_COUNT]
 
-    async def _brave_search(self, company_name: str, titles: list[str], max_results: int) -> str:
-        # e.g. site:linkedin.com/in "Recruiter" OR "Technical Recruiter" "Stripe"
+    # ── Brave Search ───────────────────────────────────────────────────────
+
+    async def _brave_search(self, company_name: str, titles: list[str], max_results: int) -> list[dict]:
         title_part = " OR ".join(f'"{t}"' for t in titles[:3])
         query = f'site:linkedin.com/in {title_part} "{company_name}"'
 
         try:
-            async with httpx.AsyncClient(timeout=20) as client:
+            async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(
                     BRAVE_SEARCH_URL,
                     headers={
@@ -269,7 +134,7 @@ If fewer than 5 real contacts were found across all companies, still call save_c
                 data = resp.json()
         except Exception as exc:
             logger.warning("Brave search error for '%s': %s", company_name, exc)
-            return json.dumps({"company": company_name, "people": [], "error": str(exc)})
+            return []
 
         people = []
         for result in (data.get("web") or {}).get("results") or []:
@@ -278,12 +143,9 @@ If fewer than 5 real contacts were found across all companies, still call save_c
                 continue
             if url in self._seen_urls:
                 continue
-
             if url.startswith("http://"):
                 url = url.replace("http://", "https://", 1)
 
-            # Parse name + title from LinkedIn page title
-            # Format: "Name - Title at Company | LinkedIn"
             page_title = result.get("title", "")
             name, job_title = "", ""
             if " - " in page_title:
@@ -295,75 +157,117 @@ If fewer than 5 real contacts were found across all companies, still call save_c
                 else:
                     job_title = rest.strip()
 
-            name_parts = name.split()
-            first_name = name_parts[0] if name_parts else ""
-            last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
+            title_lower = job_title.lower()
+            if any(kw in title_lower for kw in EXCLUDE_TITLE_KEYWORDS):
+                continue
 
+            name_parts = name.split()
             person = {
-                "first_name":   first_name,
-                "last_name":    last_name,
-                "title":        job_title,
-                "company":      company_name,
+                "first_name": name_parts[0] if name_parts else "",
+                "last_name":  " ".join(name_parts[1:]) if len(name_parts) > 1 else "",
+                "title":      job_title,
+                "company":    company_name,
                 "linkedin_url": url,
-                "email":        "",
-                "seniority":    "",
-                "snippet":      result.get("description", "")[:300],
+                "email":      "",
+                "seniority":  "",
+                "snippet":    result.get("description", "")[:300],
             }
 
             self._seen_urls.add(url)
             people.append(person)
 
-        logger.info("Brave '%s' titles=%s -> %d profiles", company_name, titles, len(people))
-        await asyncio.sleep(0.3)
-        return json.dumps({"company": company_name, "titles_searched": titles, "people": people})
+        logger.info("Brave '%s' -> %d profiles", company_name, len(people))
+        await asyncio.sleep(0.5)
+        return people
 
-    # ── Google fallback ────────────────────────────────────────────────────
+    # ── Score + outreach (batched) ─────────────────────────────────────────
 
-    async def _google_fallback(self, company: str, title_keywords: str) -> str:
-        if not settings.google_api_key or not settings.google_search_engine_id:
-            return json.dumps({"error": "Neither PDL nor Google API is configured"})
+    async def _score_and_generate_outreach(self, contacts: list[dict], prefs: UserPreferences) -> list[dict]:
+        valid = [c for c in contacts if c.get("first_name") and c.get("linkedin_url")]
+        if not valid:
+            return []
 
-        query = f'site:linkedin.com/in ({title_keywords}) "at {company}"'
-        async with httpx.AsyncClient(timeout=15) as client:
-            try:
-                resp = await client.get(
-                    "https://www.googleapis.com/customsearch/v1",
-                    params={
-                        "key": settings.google_api_key,
-                        "cx": settings.google_search_engine_id,
-                        "q": query,
-                        "num": 10,
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-            except Exception as exc:
-                logger.error("Google search error: %s", exc)
-                return json.dumps({"error": str(exc)})
+        all_scored: list[dict] = []
+        for i in range(0, len(valid), 25):
+            batch = valid[i : i + 25]
+            scored = await self._score_batch(batch, prefs)
+            all_scored.extend(scored)
+        return all_scored
 
-        results = [
-            {"title": item.get("title", ""), "url": item.get("link", ""), "snippet": item.get("snippet", "")}
-            for item in data.get("items", [])
-            if "linkedin.com/in/" in item.get("link", "")
-            and item.get("link") not in self._seen_urls
-        ]
-        return json.dumps({
-            "company": company,
-            "results": results,
-            "warning": "PDL not configured — only include contacts where snippet confirms current employment",
-        })
+    async def _score_batch(self, contacts: list[dict], prefs: UserPreferences) -> list[dict]:
+        contacts_json = json.dumps(
+            [
+                {
+                    "id": i,
+                    "first_name": c["first_name"],
+                    "last_name":  c.get("last_name", ""),
+                    "title":      c.get("title", ""),
+                    "company":    c.get("company", ""),
+                    "snippet":    c.get("snippet", "")[:200],
+                }
+                for i, c in enumerate(contacts)
+            ],
+            indent=2,
+        )
 
-    # ── Save contacts ──────────────────────────────────────────────────────
+        prompt = f"""Score these LinkedIn contacts for a {prefs.experience_level or "entry"}-level {", ".join(prefs.target_roles)} job seeker.
 
-    async def _save_contacts(self, contacts_data: list[dict]) -> str:
+Scoring guide:
+- Technical Recruiters / Talent Sourcers: 0.85-0.95
+- ICs in the relevant team (engineers, PMs, etc): 0.70-0.85
+- Engineering Managers at small/mid companies: 0.65-0.80
+- VP / Director / C-suite / Founder / Owner: 0.0 — exclude
+
+Rules:
+- Only include someone if their snippet confirms they CURRENTLY work at that company.
+- If the snippet is empty or unclear, set include=false.
+- For included contacts, write a warm 2-3 sentence outreach message that references the company/team, asks to learn about the culture, and never asks for a job or referral.
+
+Contacts:
+{contacts_json}
+
+Return ONLY a valid JSON array (no markdown, no explanation):
+[{{"id": 0, "relevance_score": 0.9, "relevance_reasoning": "...", "outreach_message": "...", "include": true}}]"""
+
+        try:
+            resp = await self.client.messages.create(
+                model=self.model,
+                max_tokens=4096,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = resp.content[0].text.strip()
+            match = re.search(r'\[.*\]', text, re.DOTALL)
+            if not match:
+                return []
+            scored_results = json.loads(match.group())
+        except Exception as exc:
+            logger.warning("Scoring batch failed: %s", exc)
+            return []
+
+        result = []
+        for sr in scored_results:
+            if not sr.get("include") or float(sr.get("relevance_score", 0)) < 0.6:
+                continue
+            idx = int(sr["id"])
+            if idx >= len(contacts):
+                continue
+            result.append({
+                **contacts[idx],
+                "relevance_score":     float(sr["relevance_score"]),
+                "relevance_reasoning": sr.get("relevance_reasoning", ""),
+                "outreach_message":    sr.get("outreach_message", ""),
+            })
+        return result
+
+    # ── Save ───────────────────────────────────────────────────────────────
+
+    async def _save_contacts_list(self, contacts_data: list[dict]) -> int:
         saved = 0
-
         for item in contacts_data:
             if not await quota.can_surface_contact(self.db, self.user_id):
                 break
 
             linkedin_url = item.get("linkedin_url") or ""
-
             if linkedin_url:
                 existing = await self.db.execute(
                     select(Contact).where(
@@ -395,4 +299,4 @@ If fewer than 5 real contacts were found across all companies, still call save_c
 
         await self.db.commit()
         self._contacts_saved = saved
-        return f"Saved {saved} contacts."
+        return saved
