@@ -1,20 +1,20 @@
 @import "tailwindcss";
 
 :root {
-  --background: #09090b;
-  --foreground: #fafafa;
-  --card: #09090b;
-  --card-foreground: #fafafa;
-  --border: rgba(255,255,255,0.08);
-  --input: rgba(255,255,255,0.06);
-  --primary: #fafafa;
-  --primary-foreground: #09090b;
-  --secondary: rgba(255,255,255,0.06);
-  --secondary-foreground: #fafafa;
-  --muted: rgba(255,255,255,0.06);
-  --muted-foreground: #a1a1aa;
-  --accent: rgba(255,255,255,0.08);
-  --accent-foreground: #fafafa;
+  --background: #08080f;
+  --foreground: #ededff;
+  --card: #0d0d1a;
+  --card-foreground: #ededff;
+  --border: rgba(120, 80, 240, 0.12);
+  --input: rgba(120, 80, 240, 0.08);
+  --primary: #7c3aed;
+  --primary-foreground: #ffffff;
+  --secondary: rgba(120, 80, 240, 0.08);
+  --secondary-foreground: #ededff;
+  --muted: rgba(120, 80, 240, 0.06);
+  --muted-foreground: #7878a0;
+  --accent: rgba(120, 80, 240, 0.10);
+  --accent-foreground: #a78bfa;
   --destructive: #ef4444;
   --radius: 0.75rem;
 }
@@ -33,11 +33,11 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Grid background pattern for hero / empty states */
+/* Grid background pattern — purple-tinted */
 .grid-bg {
   background-image:
-    linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+    linear-gradient(rgba(120, 80, 240, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(120, 80, 240, 0.05) 1px, transparent 1px);
   background-size: 40px 40px;
 }
 
@@ -47,8 +47,25 @@ body {
   -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 40%, transparent 100%);
 }
 
+/* Purple radial hero glow */
+.hero-glow::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 70% 50% at 50% -10%, rgba(124, 58, 237, 0.28) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+/* Gradient text (white → violet) */
+.gradient-text {
+  background: linear-gradient(135deg, #ffffff 0%, #c4b5fd 55%, #8b5cf6 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 9999px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+::-webkit-scrollbar-thumb { background: rgba(120, 80, 240, 0.2); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(120, 80, 240, 0.35); }
