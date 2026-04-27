@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 TARGET_COMPANY_COUNT = 25
 RECRUITER_TITLES = ["Recruiter", "Technical Recruiter", "Talent Sourcer", "University Recruiter"]
+JUNIOR_PREFIXES = ["Junior", "Associate", "Entry Level", "New Grad"]
 BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 
 EXCLUDE_KEYWORDS = {
@@ -21,6 +22,7 @@ EXCLUDE_KEYWORDS = {
     "founder", "owner", "partner", "head of",
 }
 RECRUITER_KEYWORDS = {"recruiter", "talent", "sourcer", "recruiting", "staffing"}
+JUNIOR_KEYWORDS = {"junior", "associate", "entry level", "new grad", "early career"}
 MANAGER_KEYWORDS = {"manager", "lead", "principal", "staff"}
 
 
@@ -30,9 +32,11 @@ def _score_title(title: str) -> float:
         return 0.0
     if any(k in t for k in RECRUITER_KEYWORDS):
         return 0.9
+    if any(k in t for k in JUNIOR_KEYWORDS):
+        return 0.85  # peers — ideal for referrals and culture questions
     if any(k in t for k in MANAGER_KEYWORDS):
-        return 0.7
-    return 0.75  # IC / other relevant role
+        return 0.65  # managers/leads — useful but less likely to respond
+    return 0.75  # mid-level IC
 
 
 class NetworkingAgent(BaseAgent):
@@ -64,10 +68,23 @@ class NetworkingAgent(BaseAgent):
         if not companies:
             return {"summary": "No target companies configured — add companies in Settings"}
 
+        # Build a junior/entry-level title list from target roles
+        junior_titles = [
+            f"{prefix} {role}"
+            for prefix in JUNIOR_PREFIXES[:2]
+            for role in (prefs.target_roles[:2] or [])
+        ]
+
         # Search all companies directly, no Claude in the loop
         contacts: list[dict] = []
         for company in companies[:TARGET_COMPANY_COUNT]:
-            for titles in [RECRUITER_TITLES, prefs.target_roles[:4]]:
+            search_groups = [
+                RECRUITER_TITLES,         # recruiters
+                prefs.target_roles[:4],   # mid-level ICs matching target roles
+            ]
+            if junior_titles:
+                search_groups.append(junior_titles)  # entry-level / junior ICs
+            for titles in search_groups:
                 results = await self._brave_search(company, titles, max_results=5)
                 contacts.extend(results)
 
@@ -142,9 +159,11 @@ class NetworkingAgent(BaseAgent):
         t = title.lower()
         if any(k in t for k in RECRUITER_KEYWORDS):
             return "Recruiter — high response rate to cold outreach"
+        if any(k in t for k in JUNIOR_KEYWORDS):
+            return "Entry/mid-level peer — great for referrals and culture insight"
         if any(k in t for k in MANAGER_KEYWORDS):
-            return "Manager/Lead — relevant for entry-level candidates at smaller companies"
-        return "IC in relevant team"
+            return "Manager/Lead — useful for team context at smaller companies"
+        return "Mid-level IC in relevant team"
 
     async def _save_contacts(self, contacts: list[dict]) -> int:
         saved = 0
