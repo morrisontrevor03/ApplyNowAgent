@@ -3,9 +3,11 @@ import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { contacts as contactsApi, Contact } from "@/lib/api";
+import { NetworkGraph } from "@/components/networking/NetworkGraph";
 import {
   Copy, ExternalLink, Users, Search, X,
   Calendar, Send, MessageSquare, FileEdit, UserPlus, ChevronRight,
+  List, Network,
 } from "lucide-react";
 
 // ── Pipeline config ──────────────────────────────────────────────────────
@@ -384,12 +386,15 @@ function ContactDrawer({
 
 // ── Main page ────────────────────────────────────────────────────────────
 
+type ViewMode = "list" | "graph";
+
 export default function NetworkingPage() {
   const { data = [], isLoading } = useQuery<Contact[]>({
     queryKey: ["contacts"],
     queryFn: () => contactsApi.list(),
   });
 
+  const [view, setView] = useState<ViewMode>("list");
   const [activeStage, setActiveStage] = useState<StageKey | null>(null);
   const [search, setSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState("");
@@ -414,7 +419,7 @@ export default function NetworkingPage() {
     });
   }, [data, activeStage, companyFilter, search]);
 
-  // Sync selected contact with fresh data after mutations
+  // Keep selected contact fresh after mutations
   const selectedFresh = selected ? (data.find((c) => c.id === selected.id) ?? selected) : null;
 
   if (isLoading) return <div className="animate-pulse text-zinc-500 text-sm">Loading…</div>;
@@ -422,11 +427,39 @@ export default function NetworkingPage() {
   return (
     <div className="space-y-5">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-xl font-semibold">Networking</h1>
           <p className="text-sm text-zinc-400 mt-1">{data.length} contact{data.length !== 1 ? "s" : ""}</p>
         </div>
+
+        {/* View tabs */}
+        {data.length > 0 && (
+          <div className="flex items-center gap-1 rounded-xl border border-white/8 bg-white/3 p-1">
+            <button
+              onClick={() => setView("list")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                view === "list"
+                  ? "bg-white/10 text-white"
+                  : "text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              <List className="h-3.5 w-3.5" />
+              List view
+            </button>
+            <button
+              onClick={() => setView("graph")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                view === "graph"
+                  ? "bg-white/10 text-white"
+                  : "text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              <Network className="h-3.5 w-3.5" />
+              Network view
+            </button>
+          </div>
+        )}
       </div>
 
       {data.length === 0 ? (
@@ -437,7 +470,7 @@ export default function NetworkingPage() {
             Set target roles in Settings and run the Networking Agent from the dashboard.
           </p>
         </div>
-      ) : (
+      ) : view === "list" ? (
         <>
           {/* Pipeline summary */}
           <PipelineBar data={data} activeStage={activeStage} onStageClick={setActiveStage} />
@@ -470,7 +503,6 @@ export default function NetworkingPage() {
 
           {/* Contact list */}
           <div className="rounded-xl border border-white/8 overflow-hidden">
-            {/* Table header */}
             <div className="flex items-center gap-4 px-4 py-2 bg-white/3 border-b border-white/8">
               <div className="w-8 shrink-0" />
               <div className="flex-1 text-xs font-medium text-zinc-500">Name</div>
@@ -501,9 +533,16 @@ export default function NetworkingPage() {
             </p>
           )}
         </>
+      ) : (
+        /* Network graph view — shows all contacts, click node to open drawer */
+        <NetworkGraph
+          contacts={data}
+          onSelectContact={setSelected}
+          selectedId={selected?.id ?? null}
+        />
       )}
 
-      {/* Detail drawer */}
+      {/* Detail drawer — shared between both views */}
       {selectedFresh && (
         <ContactDrawer contact={selectedFresh} onClose={() => setSelected(null)} />
       )}
