@@ -13,7 +13,6 @@ from app.services import quota
 logger = logging.getLogger(__name__)
 
 TARGET_COMPANY_COUNT = 25
-RECRUITER_TITLES = ["Recruiter", "Technical Recruiter", "Talent Sourcer", "University Recruiter"]
 JUNIOR_PREFIXES = ["Junior", "Associate", "Entry Level", "New Grad"]
 BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 
@@ -55,7 +54,7 @@ def _score_title(title: str) -> float:
     if any(k in t for k in EXCLUDE_KEYWORDS):
         return 0.0
     if any(k in t for k in RECRUITER_KEYWORDS):
-        return 0.9
+        return 0.3
     if any(k in t for k in JUNIOR_KEYWORDS):
         return 0.85  # peers — ideal for referrals and culture questions
     if any(k in t for k in MANAGER_KEYWORDS):
@@ -106,7 +105,6 @@ class NetworkingAgent(BaseAgent):
         contacts: list[dict] = []
         for company in companies[:TARGET_COMPANY_COUNT]:
             search_groups = [
-                RECRUITER_TITLES,         # recruiters
                 prefs.target_roles[:4],   # mid-level ICs matching target roles
             ]
             if junior_titles:
@@ -202,7 +200,7 @@ class NetworkingAgent(BaseAgent):
     def _reasoning(self, title: str) -> str:
         t = title.lower()
         if any(k in t for k in RECRUITER_KEYWORDS):
-            return "Recruiter — high response rate to cold outreach"
+            return "Recruiter — not a primary networking target"
         if any(k in t for k in JUNIOR_KEYWORDS):
             return "Entry/mid-level peer — great for referrals and culture insight"
         if any(k in t for k in MANAGER_KEYWORDS):
