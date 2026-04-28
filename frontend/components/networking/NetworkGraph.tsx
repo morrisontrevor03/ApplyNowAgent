@@ -111,8 +111,8 @@ function buildLayout(contacts: Contact[]): LayoutResult {
   companies.forEach(([company, members], i) => {
     const col = i % cols;
     const row = Math.floor(i / cols);
-    const cx  = (col - (Math.min(cols, numCompanies) - 1) / 2) * COL_W;
-    const cy  = (row - (numRows - 1) / 2) * ROW_H;
+    const cx  = (col - (Math.min(cols, numCompanies) - 1) / 2) * CELL;
+    const cy  = (row - (numRows - 1) / 2) * CELL;
 
     hubs.push({ company, x: cx, y: cy, members });
 
