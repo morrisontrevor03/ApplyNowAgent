@@ -28,6 +28,23 @@ def _companies_match(target: str, found: str) -> bool:
     t = target.lower().strip()
     f = found.lower().strip()
     return t in f or f in t
+
+
+def _extract_current_company(text: str) -> str:
+    """
+    Pull the employer name from an ' at Company' pattern.
+    Stops at common delimiters used in LinkedIn titles and snippets.
+    """
+    lower = text.lower()
+    idx = lower.find(" at ")
+    if idx == -1:
+        return ""
+    rest = text[idx + 4:]
+    for delim in (" | ", " · ", "·", " - ", ",", "\n"):
+        pos = rest.find(delim)
+        if pos != -1:
+            rest = rest[:pos]
+    return rest.strip()
 RECRUITER_KEYWORDS = {"recruiter", "talent", "sourcer", "recruiting", "staffing"}
 JUNIOR_KEYWORDS = {"junior", "associate", "entry level", "new grad", "early career"}
 MANAGER_KEYWORDS = {"manager", "lead", "principal", "staff"}
@@ -135,23 +152,29 @@ class NetworkingAgent(BaseAgent):
                 url = url.replace("http://", "https://", 1)
 
             page_title = result.get("title", "")
+            snippet = result.get("description", "")
             name, job_title, current_company = "", "", ""
+
             if " - " in page_title:
                 parts = page_title.split(" - ", 1)
                 name = parts[0].strip()
                 rest = parts[1].split(" | LinkedIn")[0].strip()
-                if " at " in rest.lower():
-                    at_idx = rest.lower().index(" at ")
-                    job_title = rest[:at_idx].strip()
-                    current_company = rest[at_idx + 4:].strip()
-                else:
-                    job_title = rest.strip()
+                job_title = rest.split(" at ")[0].strip() if " at " in rest.lower() else rest.strip()
+                current_company = _extract_current_company(rest)
 
-            # If the snippet reveals a current employer and it doesn't match
-            # the target company, this person has moved on — skip them.
-            if current_company and not _companies_match(company, current_company):
+            # Fall back to snippet if title didn't reveal current employer.
+            if not current_company:
+                current_company = _extract_current_company(snippet)
+
+            # Hard requirement: we must be able to confirm current employer.
+            # If the title/snippet says nothing about where they work, or they
+            # work somewhere else, skip — this is the root cause of stale contacts.
+            if not current_company:
+                logger.debug("Skipping %s — could not confirm current employer", name)
+                continue
+            if not _companies_match(company, current_company):
                 logger.debug(
-                    "Skipping %s — snippet shows current employer '%s', searched for '%s'",
+                    "Skipping %s — current employer '%s' does not match '%s'",
                     name, current_company, company,
                 )
                 continue
