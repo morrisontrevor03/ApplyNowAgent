@@ -49,6 +49,11 @@ function spokeRadius(memberCount: number): number {
   return Math.max(SPOKE_BASE, 60 + memberCount * 12);
 }
 
+// Outer boundary of a cluster: spoke tip + node radius + name label space
+function clusterFootprint(memberCount: number): number {
+  return spokeRadius(memberCount) + NODE_R + 22;
+}
+
 // ── Layout types ─────────────────────────────────────────────────────────
 
 interface HubNode {
@@ -91,10 +96,13 @@ function buildLayout(contacts: Contact[]): LayoutResult {
   const companies = Array.from(byCompany.entries()).sort((a, b) => b[1].length - a[1].length);
   const numCompanies = companies.length;
 
+  // Cell size = diameter of the largest cluster + a fixed gap.
+  // This guarantees no two adjacent clusters can overlap regardless of member count.
+  const maxFootprint = Math.max(...companies.map(([, m]) => clusterFootprint(m.length)));
+  const CELL = maxFootprint * 2 + 56;
+
   const cols    = Math.max(1, Math.ceil(Math.sqrt(numCompanies * 1.3)));
   const numRows = Math.ceil(numCompanies / cols);
-  const COL_W   = 300;
-  const ROW_H   = 300;
 
   const hubs: HubNode[]     = [];
   const persons: PersonNode[] = [];
