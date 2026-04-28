@@ -2,12 +2,12 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { contacts as contactsApi, Contact } from "@/lib/api";
+import { contacts as contactsApi, agents, settingsApi, Contact, Preferences } from "@/lib/api";
 import { NetworkGraph } from "@/components/networking/NetworkGraph";
 import {
   Copy, ExternalLink, Users, Search, X,
   Calendar, Send, MessageSquare, FileEdit, UserPlus, ChevronRight,
-  List, Network,
+  List, Network, Play, Globe, Building2,
 } from "lucide-react";
 
 // ── Pipeline config ──────────────────────────────────────────────────────
@@ -394,11 +394,40 @@ export default function NetworkingPage() {
     queryFn: () => contactsApi.list(),
   });
 
+  const { data: prefs } = useQuery<Preferences>({
+    queryKey: ["settings"],
+    queryFn: settingsApi.get,
+  });
+
   const [view, setView] = useState<ViewMode>("list");
   const [activeStage, setActiveStage] = useState<StageKey | null>(null);
   const [search, setSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState("");
   const [selected, setSelected] = useState<Contact | null>(null);
+  const [runCompany, setRunCompany] = useState("");
+  const [running, setRunning] = useState(false);
+
+  const targetCompanies = useMemo(
+    () => prefs?.target_companies ?? [],
+    [prefs]
+  );
+
+  const handleRunAgent = async () => {
+    setRunning(true);
+    try {
+      if (runCompany) {
+        await agents.runNetworkingForCompany(runCompany);
+        toast.success(`Networking agent started for ${runCompany}`);
+      } else {
+        await agents.runNetworking();
+        toast.success("Industry-wide networking agent started");
+      }
+    } catch {
+      toast.error("Failed to start agent");
+    } finally {
+      setRunning(false);
+    }
+  };
 
   const companies = useMemo(
     () => Array.from(new Set(data.map((c) => c.company))).sort(),
@@ -433,33 +462,86 @@ export default function NetworkingPage() {
           <p className="text-sm text-zinc-400 mt-1">{data.length} contact{data.length !== 1 ? "s" : ""}</p>
         </div>
 
-        {/* View tabs */}
-        {data.length > 0 && (
-          <div className="flex items-center gap-1 rounded-xl border border-white/8 bg-white/3 p-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Run agent controls */}
+          <div className="flex items-center gap-1.5 rounded-xl border border-white/8 bg-white/3 p-1.5">
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setRunCompany("")}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                  runCompany === ""
+                    ? "bg-white/10 text-white"
+                    : "text-zinc-400 hover:text-zinc-200"
+                }`}
+                title="Run for all target companies"
+              >
+                <Globe className="h-3 w-3" />
+                All
+              </button>
+              <button
+                onClick={() => {
+                  if (runCompany === "" && targetCompanies.length > 0) setRunCompany(targetCompanies[0]);
+                }}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                  runCompany !== ""
+                    ? "bg-white/10 text-white"
+                    : "text-zinc-400 hover:text-zinc-200"
+                }`}
+                title="Run for one company"
+              >
+                <Building2 className="h-3 w-3" />
+                Single
+              </button>
+            </div>
+            {runCompany !== "" && (
+              <select
+                value={runCompany}
+                onChange={(e) => setRunCompany(e.target.value)}
+                className="rounded-lg border border-white/8 bg-zinc-900 px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:ring-1 focus:ring-white/20 max-w-36"
+              >
+                {targetCompanies.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            )}
             <button
-              onClick={() => setView("list")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                view === "list"
-                  ? "bg-white/10 text-white"
-                  : "text-zinc-400 hover:text-zinc-200"
-              }`}
+              onClick={handleRunAgent}
+              disabled={running || (runCompany !== "" && targetCompanies.length === 0)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-white/8 text-zinc-200 hover:bg-white/15 hover:text-white disabled:opacity-40 transition-colors"
             >
-              <List className="h-3.5 w-3.5" />
-              List view
-            </button>
-            <button
-              onClick={() => setView("graph")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                view === "graph"
-                  ? "bg-white/10 text-white"
-                  : "text-zinc-400 hover:text-zinc-200"
-              }`}
-            >
-              <Network className="h-3.5 w-3.5" />
-              Network view
+              <Play className="h-3 w-3" />
+              {running ? "Starting…" : "Run"}
             </button>
           </div>
-        )}
+
+          {/* View tabs */}
+          {data.length > 0 && (
+            <div className="flex items-center gap-1 rounded-xl border border-white/8 bg-white/3 p-1">
+              <button
+                onClick={() => setView("list")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                  view === "list"
+                    ? "bg-white/10 text-white"
+                    : "text-zinc-400 hover:text-zinc-200"
+                }`}
+              >
+                <List className="h-3.5 w-3.5" />
+                List view
+              </button>
+              <button
+                onClick={() => setView("graph")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                  view === "graph"
+                    ? "bg-white/10 text-white"
+                    : "text-zinc-400 hover:text-zinc-200"
+                }`}
+              >
+                <Network className="h-3.5 w-3.5" />
+                Network view
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {data.length === 0 ? (

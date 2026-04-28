@@ -1,5 +1,6 @@
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,10 +13,14 @@ from app.models.user import User
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 
 
-async def _run_agent(agent_class, user_id, trigger: str):
+class SingleCompanyRequest(BaseModel):
+    company: str
+
+
+async def _run_agent(agent_class, user_id, trigger: str, **kwargs):
     async with AsyncSessionLocal() as db:
         agent = agent_class(db, user_id)
-        await agent.run(trigger=trigger)
+        await agent.run(trigger=trigger, **kwargs)
 
 
 @router.post("/job-scout/run")
@@ -36,6 +41,19 @@ async def trigger_networking(
     from app.agents.networking import NetworkingAgent
     background_tasks.add_task(_run_agent, NetworkingAgent, current_user.id, "manual")
     return {"ok": True, "message": "Networking Agent started"}
+
+
+@router.post("/networking/run-single")
+async def trigger_networking_single(
+    body: SingleCompanyRequest,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+):
+    from app.agents.networking import NetworkingAgent
+    background_tasks.add_task(
+        _run_agent, NetworkingAgent, current_user.id, "manual", company=body.company
+    )
+    return {"ok": True, "message": f"Networking Agent started for {body.company}"}
 
 
 @router.post("/application/run")

@@ -50,7 +50,7 @@ class NetworkingAgent(BaseAgent):
     agent_type = "networking"
     max_iterations = 1  # unused but required by base
 
-    async def _execute(self, **kwargs) -> dict:
+    async def _execute(self, company: str | None = None, **kwargs) -> dict:
         user_result = await self.db.execute(select(User).where(User.id == self.user_id))
         user = user_result.scalar_one_or_none()
         if not user:
@@ -71,7 +71,10 @@ class NetworkingAgent(BaseAgent):
         )
         self._seen_urls: set[str] = {row[0] for row in existing_result}
 
-        companies = list(prefs.target_companies or [])
+        if company:
+            companies = [company]
+        else:
+            companies = list(prefs.target_companies or [])
         if not companies:
             return {"summary": "No target companies configured — add companies in Settings"}
 

@@ -125,6 +125,8 @@ export const settingsApi = {
 export const agents = {
   runJobScout: () => request("/api/agents/job-scout/run", { method: "POST" }),
   runNetworking: () => request("/api/agents/networking/run", { method: "POST" }),
+  runNetworkingForCompany: (company: string) =>
+    request("/api/agents/networking/run-single", { method: "POST", body: JSON.stringify({ company }) }),
   runApplication: () => request("/api/agents/application/run", { method: "POST" }),
   runs: () => request<AgentRun[]>("/api/agents/runs"),
 };
