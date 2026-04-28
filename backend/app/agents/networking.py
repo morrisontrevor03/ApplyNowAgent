@@ -21,6 +21,13 @@ EXCLUDE_KEYWORDS = {
     "vp", "vice president", "director", "chief", "ceo", "cto", "coo", "cfo",
     "founder", "owner", "partner", "head of",
 }
+
+
+def _companies_match(target: str, found: str) -> bool:
+    """Loose company-name match to handle 'Stripe' vs 'Stripe, Inc.' etc."""
+    t = target.lower().strip()
+    f = found.lower().strip()
+    return t in f or f in t
 RECRUITER_KEYWORDS = {"recruiter", "talent", "sourcer", "recruiting", "staffing"}
 JUNIOR_KEYWORDS = {"junior", "associate", "entry level", "new grad", "early career"}
 MANAGER_KEYWORDS = {"manager", "lead", "principal", "staff"}
@@ -125,15 +132,26 @@ class NetworkingAgent(BaseAgent):
                 url = url.replace("http://", "https://", 1)
 
             page_title = result.get("title", "")
-            name, job_title = "", ""
+            name, job_title, current_company = "", "", ""
             if " - " in page_title:
                 parts = page_title.split(" - ", 1)
                 name = parts[0].strip()
                 rest = parts[1].split(" | LinkedIn")[0].strip()
                 if " at " in rest.lower():
-                    job_title = rest[: rest.lower().index(" at ")].strip()
+                    at_idx = rest.lower().index(" at ")
+                    job_title = rest[:at_idx].strip()
+                    current_company = rest[at_idx + 4:].strip()
                 else:
                     job_title = rest.strip()
+
+            # If the snippet reveals a current employer and it doesn't match
+            # the target company, this person has moved on — skip them.
+            if current_company and not _companies_match(company, current_company):
+                logger.debug(
+                    "Skipping %s — snippet shows current employer '%s', searched for '%s'",
+                    name, current_company, company,
+                )
+                continue
 
             score = _score_title(job_title)
             if score == 0.0:
