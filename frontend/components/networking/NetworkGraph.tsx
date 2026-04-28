@@ -7,7 +7,7 @@ import { X } from "lucide-react";
 
 const NODE_R = 24;   // person node radius
 const HUB_R  = 36;   // company hub radius
-const SPOKE_BASE = 130; // minimum spoke length (hub → person)
+const SPOKE_BASE = 80; // minimum spoke length (hub → person)
 
 const STAGE_COLORS: Record<string, string> = {
   discovered:        "#71717a",
@@ -46,7 +46,7 @@ function displayName(c: Contact) {
 }
 
 function spokeRadius(memberCount: number): number {
-  return Math.max(SPOKE_BASE, 90 + memberCount * 18);
+  return Math.max(SPOKE_BASE, 60 + memberCount * 12);
 }
 
 // ── Layout types ─────────────────────────────────────────────────────────
@@ -93,8 +93,8 @@ function buildLayout(contacts: Contact[]): LayoutResult {
 
   const cols    = Math.max(1, Math.ceil(Math.sqrt(numCompanies * 1.3)));
   const numRows = Math.ceil(numCompanies / cols);
-  const COL_W   = 460;
-  const ROW_H   = 460;
+  const COL_W   = 300;
+  const ROW_H   = 300;
 
   const hubs: HubNode[]     = [];
   const persons: PersonNode[] = [];
@@ -368,7 +368,7 @@ export function NetworkGraph({
     <div
       ref={containerRef}
       className="relative w-full rounded-xl border border-white/8 overflow-hidden select-none"
-      style={{ height: "calc(100vh - 260px)", minHeight: 480, background: "#080808" }}
+      style={{ height: "calc(100vh - 155px)", minHeight: 400, background: "#080808" }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
