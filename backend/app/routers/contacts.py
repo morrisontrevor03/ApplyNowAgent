@@ -3,7 +3,7 @@ import uuid
 import anthropic
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -122,6 +122,15 @@ async def draft_outreach_message(
     await db.commit()
     await db.refresh(c)
     return _serialize(c)
+
+
+@router.delete("", status_code=204)
+async def delete_all_contacts(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await db.execute(delete(Contact).where(Contact.user_id == current_user.id))
+    await db.commit()
 
 
 @router.delete("/{contact_id}", status_code=204)
