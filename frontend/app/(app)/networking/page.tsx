@@ -7,7 +7,7 @@ import { NetworkGraph } from "@/components/networking/NetworkGraph";
 import {
   Copy, ExternalLink, Users, Search, X,
   Calendar, Send, MessageSquare, FileEdit, UserPlus, ChevronRight,
-  List, Network, Play, Globe, Building2,
+  List, Network, Play, Globe, Building2, Trash2,
 } from "lucide-react";
 
 // ── Pipeline config ──────────────────────────────────────────────────────
@@ -399,6 +399,8 @@ export default function NetworkingPage() {
     queryFn: settingsApi.get,
   });
 
+  const qc = useQueryClient();
+
   const [view, setView] = useState<ViewMode>("list");
   const [activeStage, setActiveStage] = useState<StageKey | null>(null);
   const [search, setSearch] = useState("");
@@ -406,6 +408,17 @@ export default function NetworkingPage() {
   const [selected, setSelected] = useState<Contact | null>(null);
   const [runCompany, setRunCompany] = useState("");
   const [running, setRunning] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const deleteAll = useMutation({
+    mutationFn: () => contactsApi.deleteAll(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["contacts"] });
+      setConfirmDelete(false);
+      toast.success("All contacts deleted");
+    },
+    onError: () => toast.error("Failed to delete contacts"),
+  });
 
   const targetCompanies = useMemo(
     () => prefs?.target_companies ?? [],
@@ -513,6 +526,36 @@ export default function NetworkingPage() {
               {running ? "Starting…" : "Run"}
             </button>
           </div>
+
+          {/* Delete all */}
+          {data.length > 0 && (
+            confirmDelete ? (
+              <div className="flex items-center gap-1.5 rounded-xl border border-red-500/30 bg-red-500/8 px-3 py-1.5">
+                <span className="text-xs text-red-300">Delete all {data.length} contacts?</span>
+                <button
+                  onClick={() => deleteAll.mutate()}
+                  disabled={deleteAll.isPending}
+                  className="text-xs font-medium text-red-300 hover:text-red-100 transition-colors disabled:opacity-50"
+                >
+                  {deleteAll.isPending ? "Deleting…" : "Confirm"}
+                </button>
+                <button
+                  onClick={() => setConfirmDelete(false)}
+                  className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmDelete(true)}
+                className="flex items-center gap-1.5 rounded-xl border border-white/8 bg-white/3 px-3 py-1.5 text-xs font-medium text-zinc-500 hover:text-red-400 hover:border-red-500/30 transition-colors"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Clear all
+              </button>
+            )
+          )}
 
           {/* View tabs */}
           {data.length > 0 && (

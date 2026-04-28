@@ -91,6 +91,7 @@ export const contacts = {
   update: (id: string, data: Partial<Contact>) =>
     request<Contact>(`/api/contacts/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   delete: (id: string) => request<void>(`/api/contacts/${id}`, { method: "DELETE" }),
+  deleteAll: () => request<void>("/api/contacts", { method: "DELETE" }),
   draftMessage: (id: string) =>
     request<Contact>(`/api/contacts/${id}/draft-message`, { method: "POST" }),
 };
