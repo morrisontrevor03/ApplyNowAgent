@@ -141,10 +141,16 @@ class NetworkingAgent(BaseAgent):
             logger.warning("Exa search error for '%s': %s", company, exc)
             return []
 
+        raw_results = data.get("results") or []
+        logger.info("Exa raw results for '%s': %d total", company, len(raw_results))
+        for r in raw_results:
+            logger.info("  raw: url=%s | title=%s", r.get("url", "")[:80], r.get("title", "")[:80])
+
         people = []
-        for result in data.get("results") or []:
+        for result in raw_results:
             url = result.get("url", "")
             if "linkedin.com/in/" not in url:
+                logger.debug("  skip (not /in/ url): %s", url[:80])
                 continue
             if url in self._seen_urls:
                 continue
