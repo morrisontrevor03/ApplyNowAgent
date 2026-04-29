@@ -6,16 +6,16 @@ import { stripe } from "@/lib/api";
 import { Check, Zap } from "lucide-react";
 
 const FREE_FEATURES = [
-  "5 job suggestions / month",
-  "3 networking contacts / month",
-  "Tailored resume + cover letter drafts",
+  "3 Job Scout runs / month",
+  "3 Networking runs / month",
+  "3 Application Draft runs / month",
   "Email alerts for high-match jobs",
 ];
 
 const PRO_FEATURES = [
-  "Unlimited job suggestions",
-  "Unlimited networking contacts",
-  "Unlimited application drafts",
+  "Unlimited Job Scout runs",
+  "Unlimited Networking runs",
+  "Unlimited Application Draft runs",
   "Email alerts for high-match jobs",
   "Priority agent processing",
 ];
@@ -98,7 +98,7 @@ export default function PricingPage() {
             <div className="mb-6">
               <p className="text-sm font-medium text-zinc-300 mb-1">Pro</p>
               <div className="flex items-baseline gap-1">
-                <p className="text-3xl font-bold">$19</p>
+                <p className="text-3xl font-bold">$34.99</p>
                 <p className="text-sm text-zinc-400">/ month</p>
               </div>
               <p className="text-xs text-zinc-500 mt-1">Cancel anytime</p>

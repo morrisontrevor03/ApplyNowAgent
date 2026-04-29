@@ -22,6 +22,7 @@ async def get_stats(
     db: AsyncSession = Depends(get_db),
 ):
     current_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
     jobs_count = await db.scalar(
         select(func.count(Job.id)).where(Job.user_id == current_user.id, Job.is_dismissed == False)
@@ -59,6 +60,18 @@ async def get_stats(
     prefs = prefs_result.scalar_one_or_none()
     target_roles_configured = bool(prefs and prefs.target_roles)
 
+    # Agent run counts this month
+    async def _run_count(agent_type: str) -> int:
+        return await db.scalar(
+            select(func.count(AgentRun.id)).where(
+                AgentRun.user_id == current_user.id,
+                AgentRun.agent_type == agent_type,
+                AgentRun.started_at >= month_start,
+            )
+        ) or 0
+
+    run_limit = None if plan == "pro" else app_settings.free_agent_runs_per_month
+
     return {
         "jobs_count": jobs_count or 0,
         "new_jobs_count": new_jobs_count or 0,
@@ -71,6 +84,12 @@ async def get_stats(
             "contacts_surfaced": usage.contacts_surfaced if usage else 0,
             "jobs_limit": None if plan == "pro" else app_settings.free_jobs_per_month,
             "contacts_limit": None if plan == "pro" else app_settings.free_contacts_per_month,
+            "agent_runs": {
+                "job_scout": await _run_count("job_scout"),
+                "networking": await _run_count("networking"),
+                "application": await _run_count("application"),
+            },
+            "agent_runs_limit": run_limit,
         },
     }
 

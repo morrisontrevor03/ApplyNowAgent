@@ -96,8 +96,13 @@ export default function DashboardPage() {
     try {
       await fn();
       toast.success(`${label} started`);
-    } catch {
-      toast.error(`Failed to start ${label}`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "";
+      if (msg.includes("402") || msg.toLowerCase().includes("limit reached")) {
+        toast.error("Monthly run limit reached — upgrade to Pro for unlimited runs");
+      } else {
+        toast.error(`Failed to start ${label}`);
+      }
     }
   };
 
@@ -140,22 +145,36 @@ export default function DashboardPage() {
       {/* Usage */}
       {stats?.plan === "free" && (
         <div className="rounded-xl border border-white/8 bg-white/3 p-5">
-          <h2 className="text-sm font-medium mb-4">Monthly Usage</h2>
-          <div className="grid grid-cols-2 gap-6">
-            <div>
-              <p className="text-xs text-zinc-400 mb-1">Job suggestions</p>
-              <ScoreRing value={stats.usage.jobs_surfaced} limit={stats.usage.jobs_limit} />
-            </div>
-            <div>
-              <p className="text-xs text-zinc-400 mb-1">Networking suggestions</p>
-              <ScoreRing value={stats.usage.contacts_surfaced} limit={stats.usage.contacts_limit} />
-            </div>
+          <h2 className="text-sm font-medium mb-4">Monthly Agent Runs</h2>
+          <div className="grid grid-cols-3 gap-4">
+            {[
+              { label: "Job Scout", key: "job_scout" as const },
+              { label: "Networking", key: "networking" as const },
+              { label: "App Drafts", key: "application" as const },
+            ].map(({ label, key }) => {
+              const used = stats.usage.agent_runs[key];
+              const limit = stats.usage.agent_runs_limit ?? 3;
+              const atLimit = used >= limit;
+              return (
+                <div key={key}>
+                  <p className="text-xs text-zinc-400 mb-1">{label}</p>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-sm font-medium ${atLimit ? "text-amber-400" : "text-zinc-300"}`}>
+                      {used} / {limit}
+                    </span>
+                    {atLimit && (
+                      <span className="text-xs text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded-full">Limit</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
           <a
             href="/pricing"
             className="mt-4 inline-flex items-center gap-1.5 text-xs font-medium text-white bg-white/8 hover:bg-white/12 rounded-lg px-3 py-1.5 transition-colors"
           >
-            <Sparkles className="h-3 w-3" /> Upgrade to Pro for unlimited
+            <Sparkles className="h-3 w-3" /> Upgrade to Pro for unlimited runs
           </a>
         </div>
       )}

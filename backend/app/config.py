@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     # Plan limits
     free_jobs_per_month: int = 5
     free_contacts_per_month: int = 3
+    free_agent_runs_per_month: int = 3
 
 
 settings = Settings()

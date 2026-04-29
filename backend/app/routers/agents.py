@@ -1,5 +1,5 @@
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +9,7 @@ from app.database import get_db, AsyncSessionLocal
 from app.dependencies import get_current_user
 from app.models.agent_run import AgentRun
 from app.models.user import User
+from app.services import quota
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 
@@ -27,7 +28,10 @@ async def _run_agent(agent_class, user_id, trigger: str, **kwargs):
 async def trigger_job_scout(
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
+    if not await quota.can_run_agent(db, current_user.id, "job_scout"):
+        raise HTTPException(status_code=402, detail="Free plan limit reached — upgrade to Pro for unlimited agent runs")
     from app.agents.job_scout import JobScoutAgent
     background_tasks.add_task(_run_agent, JobScoutAgent, current_user.id, "manual")
     return {"ok": True, "message": "Job Scout started"}
@@ -37,7 +41,10 @@ async def trigger_job_scout(
 async def trigger_networking(
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
+    if not await quota.can_run_agent(db, current_user.id, "networking"):
+        raise HTTPException(status_code=402, detail="Free plan limit reached — upgrade to Pro for unlimited agent runs")
     from app.agents.networking import NetworkingAgent
     background_tasks.add_task(_run_agent, NetworkingAgent, current_user.id, "manual")
     return {"ok": True, "message": "Networking Agent started"}
@@ -48,7 +55,10 @@ async def trigger_networking_single(
     body: SingleCompanyRequest,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
+    if not await quota.can_run_agent(db, current_user.id, "networking"):
+        raise HTTPException(status_code=402, detail="Free plan limit reached — upgrade to Pro for unlimited agent runs")
     from app.agents.networking import NetworkingAgent
     background_tasks.add_task(
         _run_agent, NetworkingAgent, current_user.id, "manual", company=body.company
@@ -60,7 +70,10 @@ async def trigger_networking_single(
 async def trigger_application_agent(
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
+    if not await quota.can_run_agent(db, current_user.id, "application"):
+        raise HTTPException(status_code=402, detail="Free plan limit reached — upgrade to Pro for unlimited agent runs")
     from app.agents.application import ApplicationAgent
     background_tasks.add_task(_run_agent, ApplicationAgent, current_user.id, "manual")
     return {"ok": True, "message": "Application Agent started"}

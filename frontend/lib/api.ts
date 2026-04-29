@@ -153,6 +153,8 @@ export interface DashboardStats {
     contacts_surfaced: number;
     jobs_limit: number | null;
     contacts_limit: number | null;
+    agent_runs: { job_scout: number; networking: number; application: number };
+    agent_runs_limit: number | null;
   };
 }
 

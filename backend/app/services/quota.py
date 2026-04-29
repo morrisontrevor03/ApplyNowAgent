@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -53,3 +53,33 @@ async def increment_contacts_surfaced(db: AsyncSession, user_id: uuid.UUID, coun
     usage = await _get_or_create_usage(db, user_id)
     usage.contacts_surfaced += count
     await db.flush()
+
+
+async def can_run_agent(db: AsyncSession, user_id: uuid.UUID, agent_type: str) -> bool:
+    plan = await get_plan(db, user_id)
+    if plan == "pro":
+        return True
+    from app.models.agent_run import AgentRun
+    month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    result = await db.execute(
+        select(func.count(AgentRun.id)).where(
+            AgentRun.user_id == user_id,
+            AgentRun.agent_type == agent_type,
+            AgentRun.started_at >= month_start,
+        )
+    )
+    count = result.scalar() or 0
+    return count < settings.free_agent_runs_per_month
+
+
+async def get_agent_run_count(db: AsyncSession, user_id: uuid.UUID, agent_type: str) -> int:
+    from app.models.agent_run import AgentRun
+    month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    result = await db.execute(
+        select(func.count(AgentRun.id)).where(
+            AgentRun.user_id == user_id,
+            AgentRun.agent_type == agent_type,
+            AgentRun.started_at >= month_start,
+        )
+    )
+    return result.scalar() or 0
