@@ -66,30 +66,39 @@ async def trigger_application_agent(
     return {"ok": True, "message": "Application Agent started"}
 
 
-@router.get("/test-brave")
-async def test_brave(current_user: User = Depends(get_current_user)):
-    """Quick sanity-check: hits Brave Search with a Stripe recruiter query."""
-    if not settings.brave_api_key:
-        return {"error": "BRAVE_API_KEY not configured"}
+@router.get("/test-apollo")
+async def test_apollo(current_user: User = Depends(get_current_user)):
+    """Quick sanity-check: hits Apollo People Search with a Stripe engineer query."""
+    if not settings.apollo_api_key:
+        return {"error": "APOLLO_API_KEY not configured"}
     try:
         async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.get(
-                "https://api.search.brave.com/res/v1/web/search",
+            resp = await client.post(
+                "https://api.apollo.io/api/v1/mixed_people/api_search",
                 headers={
-                    "Accept": "application/json",
-                    "Accept-Encoding": "gzip",
-                    "X-Subscription-Token": settings.brave_api_key,
+                    "Content-Type": "application/json",
+                    "X-Api-Key": settings.apollo_api_key,
+                    "Cache-Control": "no-cache",
                 },
-                params={"q": 'site:linkedin.com/in "Recruiter" "Stripe"', "count": 5},
+                json={
+                    "q_organization_domains_list": ["stripe.com"],
+                    "person_titles": ["Software Engineer"],
+                    "per_page": 3,
+                },
             )
             data = resp.json()
-            results = (data.get("web") or {}).get("results") or []
+            people = data.get("people") or []
             return {
                 "status_code": resp.status_code,
-                "result_count": len(results),
+                "result_count": len(people),
                 "sample": [
-                    {"title": r.get("title"), "url": r.get("url"), "snippet": r.get("description", "")[:150]}
-                    for r in results[:3]
+                    {
+                        "name": p.get("name"),
+                        "title": p.get("title"),
+                        "company": (p.get("organization") or {}).get("name"),
+                        "linkedin_url": p.get("linkedin_url"),
+                    }
+                    for p in people[:3]
                 ],
             }
     except Exception as exc:
