@@ -41,9 +41,9 @@ export default function PricingPage() {
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-50">
+    <div className="min-h-screen text-zinc-50">
       {/* Nav */}
-      <header className="border-b border-white/6 sticky top-0 z-40 bg-zinc-950/80 backdrop-blur">
+      <header className="border-b border-white/[0.06] backdrop-blur-xl backdrop-saturate-150 sticky top-0 z-40 bg-zinc-950/60">
         <div className="mx-auto max-w-5xl px-6 h-14 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2">
             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/10">

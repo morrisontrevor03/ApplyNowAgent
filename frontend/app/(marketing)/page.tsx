@@ -50,6 +50,7 @@ export default function LandingPage() {
 
       {/* Hero */}
       <section className="relative overflow-hidden">
+        <div className="absolute inset-0 aurora-hero pointer-events-none" />
         <div className="absolute inset-0 grid-bg grid-bg-fade pointer-events-none" />
         <div className="relative mx-auto max-w-3xl px-6 py-28 text-center">
           <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-xs font-medium text-zinc-300 mb-8">
@@ -59,10 +60,10 @@ export default function LandingPage() {
             </span>
             AI agents working for you 24/7
           </div>
-          <h1 className="font-serif text-5xl sm:text-7xl tracking-tight leading-[0.95] mb-6">
+          <h1 className="text-5xl sm:text-7xl font-semibold tracking-[-0.04em] leading-[0.95] mb-6">
             The job search agent
             <br />
-            <em className="italic text-zinc-400">that never sleeps</em>
+            <span className="text-zinc-500">that never sleeps</span>
           </h1>
           <p className="text-lg text-zinc-400 leading-relaxed mb-10 max-w-xl mx-auto">
             ApplyNow runs AI agents around the clock to find jobs, build your network,
