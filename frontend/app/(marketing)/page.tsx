@@ -24,9 +24,9 @@ const features = [
 
 export default function LandingPage() {
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-50">
+    <div className="min-h-screen text-zinc-50">
       {/* Nav */}
-      <header className="border-b border-white/6 backdrop-blur sticky top-0 z-40 bg-zinc-950/80">
+      <header className="border-b border-white/[0.06] backdrop-blur-xl backdrop-saturate-150 sticky top-0 z-40 bg-zinc-950/60">
         <div className="mx-auto max-w-5xl px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/10">
@@ -53,7 +53,10 @@ export default function LandingPage() {
         <div className="absolute inset-0 grid-bg grid-bg-fade pointer-events-none" />
         <div className="relative mx-auto max-w-3xl px-6 py-28 text-center">
           <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-xs font-medium text-zinc-300 mb-8">
-            <Zap className="h-3 w-3 text-amber-400" />
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-signal opacity-60" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-signal" />
+            </span>
             AI agents working for you 24/7
           </div>
           <h1 className="text-4xl sm:text-5xl font-bold tracking-tight leading-tight mb-5">
