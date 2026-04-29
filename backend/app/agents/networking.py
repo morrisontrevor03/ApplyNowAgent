@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import re
 
 import httpx
 from sqlalchemy import select
@@ -15,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 TARGET_COMPANY_COUNT = 25
 JUNIOR_PREFIXES = ["Junior", "Associate", "Entry Level", "New Grad"]
-APOLLO_SEARCH_URL = "https://api.apollo.io/api/v1/mixed_people/api_search"
+EXA_SEARCH_URL = "https://api.exa.ai/search"
 
 EXCLUDE_KEYWORDS = {
     "vp", "vice president", "director", "chief", "ceo", "cto", "coo", "cfo",
@@ -32,15 +31,18 @@ def _companies_match(target: str, found: str) -> bool:
     return t in f or f in t
 
 
-def _company_domain(company_name: str) -> str:
-    """Best-effort domain derivation from company name. Works for most tech companies."""
-    name = company_name.lower().strip()
-    for suffix in [", inc.", " inc.", ", inc", " inc", ", llc", " llc",
-                   ", ltd", " ltd", ", corp.", " corp", ", co.", " co."]:
-        if name.endswith(suffix):
-            name = name[: -len(suffix)].strip()
-    name = re.sub(r"[^a-z0-9]", "", name)
-    return f"{name}.com"
+def _extract_current_company(text: str) -> str:
+    """Pull the employer from an ' at Company' pattern in a title or snippet."""
+    lower = text.lower()
+    idx = lower.find(" at ")
+    if idx == -1:
+        return ""
+    rest = text[idx + 4:]
+    for delim in (" | ", " · ", "·", " - ", ",", "\n"):
+        pos = rest.find(delim)
+        if pos != -1:
+            rest = rest[:pos]
+    return rest.strip()
 
 
 def _score_title(title: str) -> float:
@@ -88,87 +90,107 @@ class NetworkingAgent(BaseAgent):
         if not companies:
             return {"summary": "No target companies configured — add companies in Settings"}
 
-        # Combine mid-level IC titles and junior variants into one list per company.
         junior_titles = [
             f"{prefix} {role}"
             for prefix in JUNIOR_PREFIXES[:2]
             for role in (prefs.target_roles[:2] or [])
         ]
-        all_titles = list(prefs.target_roles[:4]) + junior_titles
 
         contacts: list[dict] = []
         for target_company in companies[:TARGET_COMPANY_COUNT]:
-            results = await self._apollo_search(target_company, all_titles, max_results=10)
-            contacts.extend(results)
+            # Two searches per company: mid-level ICs and junior/entry-level
+            for titles in [prefs.target_roles[:4], junior_titles]:
+                if titles:
+                    results = await self._exa_search(target_company, titles, max_results=10)
+                    contacts.extend(results)
 
         logger.info("Networking: %d raw profiles collected", len(contacts))
 
         saved = await self._save_contacts(contacts)
         return {"summary": f"Saved {saved} new contacts", "contacts_found": saved}
 
-    async def _apollo_search(
+    async def _exa_search(
         self, company: str, titles: list[str], max_results: int
     ) -> list[dict]:
-        domain = _company_domain(company)
+        # Build a focused natural-language query for Exa's neural search.
+        # Using 2 titles max keeps the query tight; neural search generalises from there.
+        if len(titles) >= 2:
+            query = f"{titles[0]} or {titles[1]} at {company}"
+        else:
+            query = f"{titles[0]} at {company}"
 
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(
-                    APOLLO_SEARCH_URL,
+                    EXA_SEARCH_URL,
                     headers={
                         "Content-Type": "application/json",
-                        "X-Api-Key": settings.apollo_api_key,
-                        "Cache-Control": "no-cache",
+                        "x-api-key": settings.exa_api_key,
                     },
                     json={
-                        "q_organization_domains_list": [domain],
-                        "person_titles": titles,
-                        "per_page": min(max_results, 100),
-                        "page": 1,
+                        "query": query,
+                        "category": "people",
+                        "includeDomains": ["linkedin.com"],
+                        "numResults": min(max_results, 10),
+                        "type": "neural",
                     },
                 )
                 resp.raise_for_status()
                 data = resp.json()
         except Exception as exc:
-            logger.warning("Apollo search error for '%s' (%s): %s", company, domain, exc)
+            logger.warning("Exa search error for '%s': %s", company, exc)
             return []
 
         people = []
-        for person in data.get("people") or []:
-            linkedin_url = person.get("linkedin_url") or ""
-            if not linkedin_url:
+        for result in data.get("results") or []:
+            url = result.get("url", "")
+            if "linkedin.com/in/" not in url:
                 continue
-            if linkedin_url.startswith("http://"):
-                linkedin_url = linkedin_url.replace("http://", "https://", 1)
-            if linkedin_url in self._seen_urls:
+            if url in self._seen_urls:
                 continue
+            if url.startswith("http://"):
+                url = url.replace("http://", "https://", 1)
 
-            # Apollo returns the person's current organization — verify it matches.
-            current_org = (person.get("organization") or {}).get("name", "")
-            if current_org and not _companies_match(company, current_org):
+            # LinkedIn titles indexed by Exa follow the standard format:
+            # "Name - Title at Company | LinkedIn"
+            page_title = result.get("title", "")
+            name, job_title, current_company = "", "", ""
+
+            if " - " in page_title:
+                parts = page_title.split(" - ", 1)
+                name = parts[0].strip()
+                rest = parts[1].split(" | LinkedIn")[0].strip()
+                job_title = rest.split(" at ")[0].strip() if " at " in rest.lower() else rest.strip()
+                current_company = _extract_current_company(rest)
+
+            # Require confirmed current employer before saving.
+            if not current_company:
+                logger.debug("Skipping %s — could not confirm current employer", name)
+                continue
+            if not _companies_match(company, current_company):
                 logger.debug(
-                    "Skipping %s — Apollo shows current employer '%s', searched for '%s'",
-                    person.get("name"), current_org, company,
+                    "Skipping %s — current employer '%s' does not match '%s'",
+                    name, current_company, company,
                 )
                 continue
 
-            title = person.get("title") or ""
-            score = _score_title(title)
+            score = _score_title(job_title)
             if score == 0.0:
                 continue
 
+            name_parts = name.split()
             people.append({
-                "first_name": person.get("first_name") or "",
-                "last_name": person.get("last_name") or "",
-                "title": title,
+                "first_name": name_parts[0] if name_parts else "",
+                "last_name": " ".join(name_parts[1:]) if len(name_parts) > 1 else "",
+                "title": job_title,
                 "company": company,
-                "linkedin_url": linkedin_url,
+                "linkedin_url": url,
                 "relevance_score": score,
-                "relevance_reasoning": self._reasoning(title),
+                "relevance_reasoning": self._reasoning(job_title),
             })
-            self._seen_urls.add(linkedin_url)
+            self._seen_urls.add(url)
 
-        logger.info("Apollo '%s' (%s) -> %d profiles", company, domain, len(people))
+        logger.info("Exa '%s' -> %d profiles", company, len(people))
         await asyncio.sleep(0.3)
         return people
 

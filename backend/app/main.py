@@ -21,8 +21,8 @@ def _validate_env() -> None:
 
     if not settings.anthropic_api_key:
         (errors if settings.environment == "production" else warnings).append("ANTHROPIC_API_KEY")
-    if not settings.apollo_api_key:
-        warnings.append("APOLLO_API_KEY (networking agent will not work)")
+    if not settings.exa_api_key:
+        warnings.append("EXA_API_KEY (networking agent will not work)")
 
     if settings.environment == "production":
         if settings.secret_key == "dev-secret-key-change-in-production":

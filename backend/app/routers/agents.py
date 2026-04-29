@@ -66,39 +66,35 @@ async def trigger_application_agent(
     return {"ok": True, "message": "Application Agent started"}
 
 
-@router.get("/test-apollo")
-async def test_apollo(current_user: User = Depends(get_current_user)):
-    """Quick sanity-check: hits Apollo People Search with a Stripe engineer query."""
-    if not settings.apollo_api_key:
-        return {"error": "APOLLO_API_KEY not configured"}
+@router.get("/test-exa")
+async def test_exa(current_user: User = Depends(get_current_user)):
+    """Quick sanity-check: hits Exa neural search with a Stripe engineer query."""
+    if not settings.exa_api_key:
+        return {"error": "EXA_API_KEY not configured"}
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(
-                "https://api.apollo.io/api/v1/mixed_people/api_search",
+                "https://api.exa.ai/search",
                 headers={
                     "Content-Type": "application/json",
-                    "X-Api-Key": settings.apollo_api_key,
-                    "Cache-Control": "no-cache",
+                    "x-api-key": settings.exa_api_key,
                 },
                 json={
-                    "q_organization_domains_list": ["stripe.com"],
-                    "person_titles": ["Software Engineer"],
-                    "per_page": 3,
+                    "query": "Software Engineer at Stripe",
+                    "category": "people",
+                    "includeDomains": ["linkedin.com"],
+                    "numResults": 3,
+                    "type": "neural",
                 },
             )
             data = resp.json()
-            people = data.get("people") or []
+            results = data.get("results") or []
             return {
                 "status_code": resp.status_code,
-                "result_count": len(people),
+                "result_count": len(results),
                 "sample": [
-                    {
-                        "name": p.get("name"),
-                        "title": p.get("title"),
-                        "company": (p.get("organization") or {}).get("name"),
-                        "linkedin_url": p.get("linkedin_url"),
-                    }
-                    for p in people[:3]
+                    {"title": r.get("title"), "url": r.get("url")}
+                    for r in results
                 ],
             }
     except Exception as exc:

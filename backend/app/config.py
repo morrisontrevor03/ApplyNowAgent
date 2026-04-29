@@ -24,8 +24,8 @@ class Settings(BaseSettings):
     google_api_key: str = ""
     google_search_engine_id: str = ""
 
-    # Apollo.io (people search for networking agent)
-    apollo_api_key: str = ""
+    # Exa.ai (neural web search for networking agent)
+    exa_api_key: str = ""
 
     # Email
     resend_api_key: str = ""
