@@ -59,8 +59,10 @@ export default function LandingPage() {
             </span>
             AI agents working for you 24/7
           </div>
-          <h1 className="text-4xl sm:text-5xl font-bold tracking-tight leading-tight mb-5">
-            The job search agent that never sleeps
+          <h1 className="font-serif text-5xl sm:text-7xl tracking-tight leading-[0.95] mb-6">
+            The job search agent
+            <br />
+            <em className="italic text-zinc-400">that never sleeps</em>
           </h1>
           <p className="text-lg text-zinc-400 leading-relaxed mb-10 max-w-xl mx-auto">
             ApplyNow runs AI agents around the clock to find jobs, build your network,
@@ -69,7 +71,7 @@ export default function LandingPage() {
           <div className="flex items-center justify-center gap-3">
             <Link
               href="/register"
-              className="rounded-xl bg-white px-6 py-3 text-sm font-semibold text-zinc-900 hover:bg-zinc-100 transition-colors shadow-lg shadow-white/10"
+              className="btn-primary rounded-xl px-6 py-3 text-sm font-semibold"
             >
               Start free
             </Link>
@@ -87,10 +89,7 @@ export default function LandingPage() {
       <section className="mx-auto max-w-5xl px-6 py-20">
         <div className="grid gap-5 sm:grid-cols-3">
           {features.map(({ icon: Icon, title, description }) => (
-            <div
-              key={title}
-              className="rounded-2xl border border-white/8 bg-white/3 p-6 space-y-3 hover:border-white/12 transition-colors"
-            >
+            <div key={title} className="card-glow p-6 space-y-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5">
                 <Icon className="h-5 w-5 text-zinc-300" />
               </div>
@@ -108,7 +107,7 @@ export default function LandingPage() {
           <p className="text-zinc-400 text-sm mb-6">Start free — no credit card required.</p>
           <Link
             href="/register"
-            className="inline-flex rounded-xl bg-white px-6 py-2.5 text-sm font-semibold text-zinc-900 hover:bg-zinc-100 transition-colors"
+            className="btn-primary inline-flex rounded-xl px-6 py-2.5 text-sm font-semibold"
           >
             Create your account →
           </Link>

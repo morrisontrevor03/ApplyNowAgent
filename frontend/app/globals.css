@@ -28,13 +28,14 @@
   --color-signal-soft: var(--signal-soft);
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --font-serif: var(--font-instrument-serif), ui-serif, Georgia, serif;
 }
 
 body {
   background:
-    radial-gradient(ellipse 70% 55% at 50% -10%, oklch(0.85 0.18 145 / 0.10), transparent 70%),
-    radial-gradient(ellipse 45% 35% at 88% 8%, oklch(0.55 0.15 280 / 0.10), transparent 65%),
-    radial-gradient(ellipse 50% 40% at 8% 30%, oklch(0.5 0.12 200 / 0.07), transparent 70%),
+    radial-gradient(ellipse 130% 160% at 50% -30%, oklch(0.85 0.18 145 / 0.07), transparent 95%),
+    radial-gradient(ellipse 90% 130% at 100% 0%, oklch(0.55 0.15 280 / 0.06), transparent 90%),
+    radial-gradient(ellipse 90% 130% at 0% 25%, oklch(0.5 0.12 200 / 0.04), transparent 90%),
     var(--background);
   background-attachment: fixed;
   color: var(--foreground);
@@ -57,15 +58,65 @@ body {
 /* Grid background pattern for hero / empty states */
 .grid-bg {
   background-image:
-    linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
-  background-size: 40px 40px;
+    linear-gradient(rgba(255,255,255,0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.022) 1px, transparent 1px);
+  background-size: 24px 24px;
 }
 
 /* Radial fade mask for grid bg */
 .grid-bg-fade {
   mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 40%, transparent 100%);
   -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 40%, transparent 100%);
+}
+
+/* Gradient-border card — feature tiles, hover pulls in signal-green ring */
+.card-glow {
+  position: relative;
+  background:
+    linear-gradient(oklch(0.18 0.005 285), oklch(0.16 0.005 285)) padding-box,
+    linear-gradient(135deg, oklch(0.40 0.03 285 / 0.45), oklch(0.22 0.01 285 / 0.10)) border-box;
+  border: 1px solid transparent;
+  border-radius: 1rem;
+  transition: background 240ms ease, transform 240ms ease;
+}
+.card-glow:hover {
+  background:
+    linear-gradient(oklch(0.20 0.005 285), oklch(0.17 0.005 285)) padding-box,
+    linear-gradient(135deg, oklch(0.85 0.18 145 / 0.55), oklch(0.40 0.05 285 / 0.15)) border-box;
+}
+
+/* Glowing primary CTA — layered shadows for premium tactility */
+.btn-primary {
+  background: linear-gradient(180deg, #ffffff, #e4e4e7);
+  color: #09090b;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.65),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.10),
+    0 1px 0 rgba(0, 0, 0, 0.40),
+    0 10px 28px -10px rgba(255, 255, 255, 0.30),
+    0 0 0 1px rgba(255, 255, 255, 0.10);
+  transition: transform 160ms ease, box-shadow 240ms ease;
+}
+.btn-primary:hover {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.65),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.10),
+    0 1px 0 rgba(0, 0, 0, 0.40),
+    0 14px 36px -10px oklch(0.85 0.18 145 / 0.35),
+    0 0 0 1px rgba(255, 255, 255, 0.15);
+}
+
+/* Mono accent — for scores, timestamps, agent tags */
+.tag-mono {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.375rem;
+  background: oklch(0.22 0.005 285);
+  color: oklch(0.7 0.005 285);
+  border: 1px solid oklch(0.30 0.005 285);
 }
 
 /* Scrollbar */
