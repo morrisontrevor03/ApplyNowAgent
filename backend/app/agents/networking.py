@@ -32,12 +32,22 @@ def _companies_match(target: str, found: str) -> bool:
 
 
 def _extract_current_company(text: str) -> str:
-    """Pull the employer from an ' at Company' pattern in a title or snippet."""
-    lower = text.lower()
-    idx = lower.find(" at ")
-    if idx == -1:
+    """
+    Pull the employer from ' at Company', ' @ Company', or '@Company' patterns.
+    Exa titles use '@' instead of 'at', so we must handle both.
+    """
+    # Try each marker in preference order; pick the earliest occurrence.
+    candidates = []
+    for marker, skip in [(" at ", 4), (" @ ", 3), ("@", 1)]:
+        idx = text.lower().find(marker.lower()) if marker != "@" else text.find(marker)
+        if idx != -1:
+            candidates.append((idx, skip))
+
+    if not candidates:
         return ""
-    rest = text[idx + 4:]
+
+    idx, skip = min(candidates, key=lambda x: x[0])
+    rest = text[idx + skip:]
     for delim in (" | ", " · ", "·", " - ", ",", "\n"):
         pos = rest.find(delim)
         if pos != -1:
@@ -141,33 +151,44 @@ class NetworkingAgent(BaseAgent):
             logger.warning("Exa search error for '%s': %s", company, exc)
             return []
 
-        raw_results = data.get("results") or []
-        logger.info("Exa raw results for '%s': %d total", company, len(raw_results))
-        for r in raw_results:
-            logger.info("  raw: url=%s | title=%s", r.get("url", "")[:80], r.get("title", "")[:80])
-
         people = []
-        for result in raw_results:
+        for result in data.get("results") or []:
             url = result.get("url", "")
             if "linkedin.com/in/" not in url:
-                logger.debug("  skip (not /in/ url): %s", url[:80])
                 continue
             if url in self._seen_urls:
                 continue
             if url.startswith("http://"):
                 url = url.replace("http://", "https://", 1)
 
-            # LinkedIn titles indexed by Exa follow the standard format:
-            # "Name - Title at Company | LinkedIn"
+            # Exa LinkedIn titles:  "Name | Title @ Company"  or  "Name | Title at Company"
+            # Older indexed format: "Name - Title at Company | LinkedIn"
             page_title = result.get("title", "")
             name, job_title, current_company = "", "", ""
 
-            if " - " in page_title:
+            if " | " in page_title and not page_title.endswith("| LinkedIn"):
+                # Exa format
+                name, _, rest = page_title.partition(" | ")
+                name = name.strip()
+                rest = rest.strip()
+            elif " - " in page_title:
+                # Fallback for older-style indexed titles
                 parts = page_title.split(" - ", 1)
                 name = parts[0].strip()
                 rest = parts[1].split(" | LinkedIn")[0].strip()
-                job_title = rest.split(" at ")[0].strip() if " at " in rest.lower() else rest.strip()
+            else:
+                rest = ""
+
+            if rest:
                 current_company = _extract_current_company(rest)
+                # Strip company marker to get the clean job title
+                for marker in [f" at {current_company}", f" @ {current_company}", f"@{current_company}"]:
+                    if current_company and marker.lower() in rest.lower():
+                        idx = rest.lower().find(marker.lower())
+                        job_title = rest[:idx].strip().rstrip(",").strip()
+                        break
+                else:
+                    job_title = rest.strip()
 
             # Require confirmed current employer before saving.
             if not current_company:
