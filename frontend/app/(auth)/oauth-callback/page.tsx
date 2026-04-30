@@ -1,14 +1,14 @@
 "use client";
 import { useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 
 export default function OAuthCallbackPage() {
   const router = useRouter();
-  const params = useSearchParams();
   const { login } = useAuth();
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
     const token = params.get("token");
     const next = params.get("next") ?? "dashboard";
     if (!token) {
