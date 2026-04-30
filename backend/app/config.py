@@ -39,7 +39,12 @@ class Settings(BaseSettings):
     # Storage
     upload_dir: str = "./uploads"
 
+    # Google OAuth
+    google_client_id: str = ""
+    google_client_secret: str = ""
+
     # App
+    backend_url: str = "http://localhost:8000"
     frontend_url: str = "http://localhost:3000"
     environment: str = "development"
 

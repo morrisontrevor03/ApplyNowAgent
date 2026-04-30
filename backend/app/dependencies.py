@@ -20,7 +20,9 @@ def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
 
-def verify_password(plain: str, hashed: str) -> bool:
+def verify_password(plain: str, hashed: str | None) -> bool:
+    if not hashed:
+        return False
     return pwd_context.verify(plain, hashed)
 
 
