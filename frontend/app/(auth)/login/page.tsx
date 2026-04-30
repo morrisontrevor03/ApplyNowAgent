@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
 import { auth } from "@/lib/api";
@@ -13,10 +13,9 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
   const router = useRouter();
-  const params = useSearchParams();
 
   useEffect(() => {
-    const error = params.get("error");
+    const error = new URLSearchParams(window.location.search).get("error");
     if (error) toast.error("Google sign-in failed. Please try again.");
   }, []);
 
